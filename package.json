@@ -1,0 +1,17 @@
+{
+  "name": "blaze-phoenix-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Source of the BlazePhoenix HTTP API and remote MCP endpoint, published for security review.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.21.40"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.7.2"
+  }
+}
