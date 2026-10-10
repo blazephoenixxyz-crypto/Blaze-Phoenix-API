@@ -33,7 +33,7 @@ const QUOTE_PARAMS = {
   slippageBps: { type: 'integer', description: '0–5000 (default 50); never below the on-chain floor' },
   userMinOut: { type: 'string', description: 'optional explicit minimum output, base units' },
   deadlineSec: { type: 'integer', description: 'deadline horizon in seconds, 10–3600 (default 120)' },
-  exact: { type: 'boolean', description: 'true → previewPlanExact (execution-grade dry-run, no calldata)' },
+  exact: { type: 'boolean', description: 'true → previewPlanExact: each concentrated leg dry-run on its own pool, then reverted (no calldata). No tokens move, so a token\'s own transfer fee or block is not measured; simulate the swap from the holder to test that' },
   version: { type: 'string', description: 'protocol version: latest (default) | 1 | 2 | 2.0.0' },
 } as const;
 

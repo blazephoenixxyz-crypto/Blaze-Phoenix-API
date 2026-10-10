@@ -2,10 +2,28 @@
   "name": "blaze-phoenix-api",
   "version": "1.0.0",
   "private": true,
-  "description": "Source of the BlazePhoenix HTTP API and remote MCP endpoint, published for security review.",
+  "description": "Source of the BlazePhoenix HTTP API and remote MCP endpoint, published for security review. Free and keyless; quotes run on your own RPC node.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blazephoenixxyz-crypto/Blaze-Phoenix-API.git"
+  },
+  "homepage": "https://blazephoenix.xyz/api",
+  "bugs": "https://github.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/issues",
+  "keywords": [
+    "blazephoenix",
+    "dex-aggregator",
+    "defi",
+    "api",
+    "mcp",
+    "byo-rpc",
+    "cloudflare-workers",
+    "llms-txt"
+  ],
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs"
   },
   "dependencies": {
     "viem": "^2.21.40"
