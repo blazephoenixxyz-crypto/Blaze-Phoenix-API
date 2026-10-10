@@ -1,0 +1,43 @@
+# BlazePhoenix API
+
+> Source of the BlazePhoenix HTTP API (`https://blazephoenix.xyz/api`) and the remote MCP endpoint (`https://blazephoenix.xyz/mcp`), a Cloudflare Worker published so anyone can read what they integrate with. BlazePhoenix is the on-chain DEX aggregator on Base, Ethereum, Optimism, Arbitrum and Robinhood Chain.
+
+The API is free and keyless: no API key, no signup, open CORS. Quotes run on your RPC node, not ours. `GET /api/quote/prepare` returns the exact `eth_call` to run on your node; `POST /api/quote/decode` is a pure function that turns your node's answer into the quote, the Phoenix Check verdict and, with a `recipient`, verified unsigned Router calldata. The retired relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) answer `400 rpc_required` with the prepared call inline.
+
+Limits: `POST /api/quote/prepare` takes up to 32 requests (returned as one JSON-RPC batch for your node), and `POST /api/quote/decode` up to 32 items. The other read endpoints (`/api/stats`, `/api/tape`, `/api/badge`, `/api/verify`, `/solvency`) read the chain from our side and need no node from you.
+
+Quote flow:
+
+```bash
+curl 'https://blazephoenix.xyz/api/quote/prepare?chain=base&tokenIn=WETH&tokenOut=USDC&amountIn=1000000000000000000'
+# run the returned eth_call (`rpcRequest`, or the ready-made `curl`) on your own node, then:
+curl -X POST https://blazephoenix.xyz/api/quote/decode -H 'content-type: application/json' \
+  -d '{"request": <request from prepare>, "result": "<your node's eth_call result>"}'
+```
+
+In-process instead of HTTP: `npm i @blazephoenix/sdk viem`, or the local MCP server `npx -y @blazephoenix/mcp`, both reading your node from `BLAZEPHOENIX_RPC_URL` or `BLAZEPHOENIX_RPC_<CHAIN>`.
+
+Remote MCP tools: `prepare_quote`, `decode_quote`, `get_deployments`, `get_abi`.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/README.md): endpoints, cost and limits, layout, how this tree relates to production
+- [OpenAPI 3.1](https://blazephoenix.xyz/api/openapi.json): the authoritative request and response shapes
+- [API discovery root](https://blazephoenix.xyz/api): endpoints, docs and SDK as JSON
+- [Security policy](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/SECURITY.md): scope and how to report a vulnerability
+
+## Source
+
+- [worker/quoteApi.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/quoteApi.ts): the `/api/*` routes
+- [worker/codec.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/codec.ts): prepare and decode, the pure quote codec
+- [worker/mcp.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/mcp.ts): the remote MCP endpoint
+
+## Related
+
+- [BlazePhoenix SDK llms.txt](https://raw.githubusercontent.com/blazephoenixxyz-crypto/SDK/main/llms.txt): the TypeScript SDK, quotes on your RPC in-process
+- [BlazePhoenix MCP llms.txt](https://raw.githubusercontent.com/blazephoenixxyz-crypto/blazephoenix-mcp/main/llms.txt): the local MCP server for AI agents
+- [BlazePhoenix Dex llms.txt](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-Dex/main/llms.txt): the contracts, their design and their verification ([repository](https://github.com/blazephoenixxyz-crypto/Blaze-Phoenix-Dex))
+
+## Optional
+
+- [Site llms.txt](https://blazephoenix.xyz/llms.txt): the integration guide for the whole project
