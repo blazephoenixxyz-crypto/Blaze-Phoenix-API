@@ -10,7 +10,7 @@ const ERROR_SCHEMA = {
   type: 'object',
   properties: {
     ok: { type: 'boolean', enum: [false] },
-    code: { type: 'string', description: 'stable machine code (bad_*, not_deployed, no_route, decode_failed, rpc_required…)' },
+    code: { type: 'string', description: 'stable machine code (bad_*, not_deployed, no_route, decode_failed, result_mismatch, rpc_required…)' },
     error: { type: 'string' },
   },
   required: ['ok', 'code', 'error'],
@@ -31,6 +31,10 @@ const QUOTE_SCHEMA = {
     amountOut: {
       type: 'string',
       description: 'net output after the protocol fee — compare THIS across venues',
+    },
+    grossAmountOut: {
+      type: 'string',
+      description: 'output before the protocol fee (same as quote.grossOut); amountOut + quote.protocolFee. Absent on a 2.x exact multi-hop quote, where the fee is taken on the anchor hop\'s input (quote.feeTakenOn) and every figure is already net',
     },
     quote: {
       type: 'object',
@@ -99,7 +103,12 @@ const QUOTE_SCHEMA = {
     entry: { type: 'string', enum: ['swapExactIn', 'swapExactInNative'] },
     encodedBy: { type: 'string', enum: ['quoter', 'site'] },
     approval: { type: 'object', description: 'ERC-20 input: approve the Router for tokenIn before sending tx' },
-    txError: { type: 'object', description: 'why no tx was emitted (not_executable, calldata_mismatch, wrap_required)' },
+    txError: { type: 'object', description: 'why no tx was emitted (not_executable, calldata_mismatch, wrap_required, deadline_passed, min_required — decode is pure, so a tx needs userMinOut set by the caller)' },
+    exact: {
+      type: 'object',
+      description: 'mode exact only: what the pool dry-run measures (`tested`) and what it does not (`notTested`)',
+      properties: { tested: { type: 'string' }, notTested: { type: 'string' } },
+    },
     wrapRequired: { type: 'boolean', description: 'in=ETH on a 1.x Router — wrap to WETH before swapping' },
     unwrapAfter: { type: 'boolean', description: 'out=ETH — the Router delivers WETH' },
     meta: {
@@ -162,7 +171,7 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'exact', in: 'query', required: false,
-    description: 'exact=1 → execution-grade re-quote (previewPlanExact, slower)',
+    description: 'exact=1 → previewPlanExact: every leg dry-run on its pool in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes',
     schema: { type: 'string', enum: ['1'] },
   },
 ] as const;
@@ -239,7 +248,7 @@ export const OPENAPI = {
         responses: {
           '200': { description: 'decoded quote', content: { 'application/json': { schema: QUOTE_SCHEMA } } },
           '400': { description: 'invalid request/result', content: { 'application/json': { schema: ERROR_SCHEMA } } },
-          '422': { description: 'empty result (no_route) or not a Quoter answer (decode_failed)', content: { 'application/json': { schema: ERROR_SCHEMA } } },
+          '422': { description: 'empty result (no_route), not a Quoter answer (decode_failed), or not the Quoter answer to this request (result_mismatch)', content: { 'application/json': { schema: ERROR_SCHEMA } } },
         },
       },
     },
@@ -254,8 +263,11 @@ export const OPENAPI = {
       get: {
         operationId: 'getAbi',
         summary: 'Generated ABI of a protocol contract (quoter | router | solver | hub | core | errors)',
-        parameters: [{ name: 'contract', in: 'query', required: false, schema: { type: 'string' } }],
-        responses: { '200': { description: 'abi', content: { 'application/json': {} } } },
+        parameters: [
+          { name: 'contract', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'version', in: 'query', required: false, schema: { type: 'string' }, description: 'a registry version (e.g. 1.0.0); the served generation is 2.0.0, and an older version is answered with a versionNote. Unknown → 400 bad_version' },
+        ],
+        responses: { '200': { description: 'abi', content: { 'application/json': {} } }, '400': { description: 'bad_contract | bad_version' } },
       },
     },
     '/api/quote': {
@@ -324,7 +336,7 @@ export const OPENAPI = {
           schema: { type: 'string' },
         }],
         responses: {
-          '200': { description: 'live value + block height (or the list of verifiable ids)', content: { 'application/json': {} } },
+          '200': { description: 'the read and its block height, stated in `verifies`; `ok` attests that read only, and `claim` is context (or the list of verifiable ids)', content: { 'application/json': {} } },
           '404': { description: 'unknown fact id', content: { 'application/json': { schema: ERROR_SCHEMA } } },
           '422': { description: 'fact carries a prose proof, not a zero-argument call — reproduce by hand', content: { 'application/json': { schema: ERROR_SCHEMA } } },
           '502': { description: 'all upstream RPCs failed', content: { 'application/json': { schema: ERROR_SCHEMA } } },
