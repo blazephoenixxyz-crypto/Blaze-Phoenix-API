@@ -66,7 +66,11 @@ function dex(chainId: DeployedChainId, staking: `0x${string}`): Pick<ChainConfig
 // to be walked in order: walking them in order would burn key #1 to its cap
 // while #6 sat untouched. lib/rpc.ts spreads sessions across them (see the
 // distribution note there) and rotates on failure.
-export const ALCHEMY_KEYS: string[] = []; // the production keys are injected at deploy time and are not published
+// NEVER in source: everything under src/ ships to every browser, so a key here
+// is a key anyone can lift from the served JS (2026-10-13: it was, in a chunk).
+// The Worker reads its keys from secrets (worker/providerKeys.ts); the browser
+// uses public nodes and the user's own RPC.
+export const ALCHEMY_KEYS: string[] = [];
 /** Alchemy subdomain per chain (they differ from our own slugs). */
 export const ALCHEMY_NET: Record<SupportedChainId, string> = {
   1: 'eth-mainnet', 8453: 'base-mainnet', 10: 'opt-mainnet',
@@ -88,8 +92,8 @@ export function alchemyFor(chainId: SupportedChainId): string[] {
 // minutes. Its private mempool is still where a SWAP is broadcast — that is
 // worth spending on, because that is where sandwiching happens. Full policy
 // and the reasoning per surface: lib/rpc.ts.
-export const DRPC_KEY = ''; // the production key is injected at deploy time and is not published
-const drpcUrl = (net: string) => `https://lb.drpc.live/${net}/${DRPC_KEY}`;
+export const DRPC_KEY = ''; // never in source — see ALCHEMY_KEYS above
+const drpcUrl = (net: string) => (DRPC_KEY ? `https://lb.drpc.live/${net}/${DRPC_KEY}` : '');
 // Robinhood chain (4663) IS on dRPC (same keyed load-balancer as every chain);
 // its own public node is the fallback.
 export const ROBINHOOD_RPC = 'https://rpc.mainnet.chain.robinhood.com';
@@ -107,7 +111,7 @@ export const robinhoodChain = defineChain({
   id: 4663,
   name: 'Robinhood',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [ROBINHOOD_RPC, DRPC[4663]] } },
+  rpcUrls: { default: { http: [ROBINHOOD_RPC, DRPC[4663]].filter(Boolean) } },
   blockExplorers: { default: { name: 'Blockscout', url: 'https://robinhoodchain.blockscout.com' } },
 });
 
@@ -231,11 +235,13 @@ export const CHAINS: Record<SupportedChainId, ChainConfig> = {
     ...dex(4663, ZERO),
   },
 };
+// Keyed entries are empty when no key is compiled in (always, now): drop them.
+for (const c of Object.values(CHAINS)) c.rpcs = c.rpcs.filter(Boolean);
 
 /** The keyed dRPC endpoint preferred for a chain's larger trades (and all of
  *  Ethereum's). The actual ordering decision lives in lib/rpc.ts rpcsForTrade. */
 export function preferredDrpc(chainId: number): string | undefined {
-  return DRPC[chainId as SupportedChainId];
+  return DRPC[chainId as SupportedChainId] || undefined;
 }
 
 // Generic dRPC public endpoints — shown as the example/placeholder in the RPC

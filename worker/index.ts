@@ -26,6 +26,7 @@ import {
 import { handleOpenapi } from './openapi';
 import { handleSolvencyReport, handleBadge } from './solvency';
 import { handleMcp, MCP_CORS_HEADERS } from './mcp';
+import { setProviderKeys } from './providerKeys';
 import { markdownMirrorPath } from './negotiate';
 import { handleVerify } from './verify';
 import { classifyRequest, type RequestClass } from './requestClass';
@@ -44,6 +45,9 @@ interface Env {
   // Deploy Hook URL for the scheduled rebuild (see scheduled() below).
   // Set as a secret, never in wrangler.jsonc: whoever holds it can queue builds.
   DEPLOY_HOOK_URL?: string;
+  // Provider keys for the Worker's own reads (worker/providerKeys.ts). Secrets only.
+  ALCHEMY_KEYS?: string;
+  DRPC_KEY?: string;
 }
 
 // Vulnerability-scanner shield. Bots probe every public site for accidentally
@@ -60,6 +64,7 @@ const SCANNER_RE =
 
 export default {
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
+    setProviderKeys(env);
     const url = new URL(request.url);
     // ─── Actor class: allow the good, meter only the bad — see requestClass.ts ───
     // Decided ONCE per request from the proof Cloudflare already made
