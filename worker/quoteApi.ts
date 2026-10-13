@@ -36,7 +36,7 @@ import {
 } from 'viem';
 import { QUOTER_ABI, ROUTER_ABI, CORE_ABI, HUB_ABI, SOLVER_ABI, BLAZE_ERRORS_ABI, ABI_SOURCE_REVISION } from '../src/abis/blaze';
 import { CHAINS, CHAIN_ORDER, isDexLive, alchemyFor, DRPC, type SupportedChainId } from '../src/config/chains';
-import { isV2 } from '../src/config/deployments';
+import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
   prepareQuote, decodeQuote, registryDocument, phoenixChecks, RPC_REQUIRED_MESSAGE, type Preview,
 } from './codec';
@@ -831,7 +831,7 @@ const SECS_PER_BLOCK: Record<SupportedChainId, number> = {
   1: 12, 8453: 2, 10: 2, 42161: 0.25, 4663: 2,
 };
 
-async function rpcJson(chainId: SupportedChainId, method: string, params: unknown[]): Promise<unknown> {
+export async function rpcJson(chainId: SupportedChainId, method: string, params: unknown[]): Promise<unknown> {
   // FOUR endpoints, not two. The original budget was two, on the reasoning that
   // stats are edge-cached so a tight budget is cheap — sound logic, overtaken by
   // the pool rotting underneath it.
@@ -956,7 +956,7 @@ const TAPE_KEEP = 15;
 const TAPE_MAX_CHUNKS = 12;
 export async function handleTape(url: URL): Promise<Response> {
   const chainId = resolveChainParam(url.searchParams.get('chain') ?? url.searchParams.get('chainId')) ?? 8453;
-  if (!isDexLive(chainId)) return json(400, { ok: false, error: 'chain not live' });
+  if (!isDexLive(chainId)) return json(400, { ok: false, code: 'chain_not_live', error: 'chain not live' });
   // v2: the body gained chunksScanned/chunksOk/measured. Bump so the 2-minute
   // edge cache cannot keep serving v1 bodies that lack them.
   const CACHE_KEY = `__tape_v2_${chainId}`;
@@ -1129,18 +1129,34 @@ export function handleDeployments(): Response {
 const ABIS: Record<string, readonly unknown[]> = {
   quoter: QUOTER_ABI, router: ROUTER_ABI, solver: SOLVER_ABI, hub: HUB_ABI, core: CORE_ABI, errors: BLAZE_ERRORS_ABI,
 };
+// One generation is served: the 2.0.0 sources. `version` is answered, never silently ignored:
+// a known older version gets the same ABI with a note saying so, an unknown one is refused.
+const ABI_GENERATION = '2.0.0';
+const ABI_OLDER_NOTE = 'This is the 2.0.0 ABI: there is no separate 1.x generation here. The 1.x functions keep their signatures, but entries 2.0.0 added revert on a 1.x deployment. Check a selector against the deployed bytecode before you call it.';
 export function handleAbi(url: URL): Response {
   const c = (url.searchParams.get('contract') ?? '').trim().toLowerCase();
+  const asked = url.searchParams.get('version')?.trim();
+  const known = DEPLOYMENTS.versions.map((v) => v.version);
+  if (asked !== undefined && !known.includes(asked)) {
+    return json(400, { ok: false, code: 'bad_version', error: `version must be one of: ${known.join(', ')}` });
+  }
+  const versionInfo = {
+    generation: ABI_GENERATION,
+    live: DEPLOYMENTS.versions.filter((v) => v.status === 'live').map((v) => v.version),
+    ...(asked !== undefined ? { requestedVersion: asked } : {}),
+    ...(asked !== undefined && asked !== ABI_GENERATION ? { versionNote: ABI_OLDER_NOTE } : {}),
+  };
   if (!c) {
     return json(200, {
-      ok: true, revision: ABI_SOURCE_REVISION, contracts: Object.keys(ABIS),
+      ok: true, revision: ABI_SOURCE_REVISION, ...versionInfo, contracts: Object.keys(ABIS),
       example: '/api/abi?contract=quoter',
       note: 'Generated from Blaze-Phoenix-Dex with solc 0.8.36. 1.0.0 deployments answer every 1.x function with the same signature; 2.0.0 adds previewAndEncode, batchQuote, swapExactInNative, swapBestExactIn, VERSION() and ExecutionProof.',
     }, 3_600);
   }
-  const abi = ABIS[c];
+  // Own keys only: `__proto__` or `constructor` must not resolve through the prototype.
+  const abi = Object.prototype.hasOwnProperty.call(ABIS, c) ? ABIS[c] : undefined;
   if (!abi) return json(400, { ok: false, code: 'bad_contract', error: `contract must be one of: ${Object.keys(ABIS).join(', ')}` });
-  return json(200, { ok: true, contract: c, revision: ABI_SOURCE_REVISION, abi }, 3_600);
+  return json(200, { ok: true, contract: c, revision: ABI_SOURCE_REVISION, ...versionInfo, abi }, 3_600);
 }
 
 // ── GET /api/health — monitoring surface (uptime bots, integrators) ─────────

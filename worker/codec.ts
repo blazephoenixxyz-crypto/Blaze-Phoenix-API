@@ -307,7 +307,77 @@ const minOutFor = (netOut: bigint, slippageBps: number, floor: bigint): bigint =
 };
 const fp = (r: Route) => JSON.stringify(r, (_k, v) => (typeof v === 'bigint' ? `${v}n` : typeof v === 'string' ? v.toLowerCase() : v));
 
-export function decodeQuote(rawReq: unknown, rawResult: unknown):
+/** The fields a Quoter preview must satisfy by construction (`_pack`), and the ones that tie it
+ *  to the request it answers. A result that breaks one was not produced by the Quoter for this
+ *  request, so nothing — no verdict, no calldata — is built on it. */
+export function previewMismatches(pv: Preview, req: PreparedRequest): string[] {
+  const out: string[] = [];
+  const asked = req.userMinOut ? BigInt(req.userMinOut) : 0n;
+  if (pv.userMinOut !== asked) out.push('userMinOut is not the requested one');
+  if (pv.ironFloor !== pv.route.singleOutFloor) out.push('ironFloor is not the route floor');
+  if (pv.effectiveMinOut !== (pv.userMinOut > pv.ironFloor ? pv.userMinOut : pv.ironFloor)) out.push('effectiveMinOut is not max(userMinOut, ironFloor)');
+  if (pv.netOut > pv.grossOut) out.push('netOut above grossOut');
+  if (pv.canExecute && pv.netOut < pv.effectiveMinOut) out.push('executable below its own minimum');
+  if (overspends(pv.route, BigInt(req.amountIn))) out.push('route spends more than the requested amountIn');
+  return out;
+}
+
+/** Hop 0 may commit less than the request (a partial fill, refunded by the Router), never more. */
+function overspends(route: Route, amountIn: bigint): boolean {
+  const h0 = route.hops[0];
+  if (!h0) return false;
+  const committed = h0.legs.reduce((s, l) => s + l.amountIn, 0n);
+  return h0.amountIn > amountIn || committed > amountIn;
+}
+
+/** The protocol fee on a gross output, rounded up: the Router's deduction, and the one the 2.x
+ *  Quoter applies in previewPlanExact (`gross - mulDivUp(gross, PROTOCOL_FEE_BPS, BPS)`). */
+export const protocolFeeOn = (gross: bigint): bigint =>
+  (gross * BigInt(SITE.protocol.feeBps) + 9_999n) / 10_000n;
+
+/** What previewPlanExact measures, and what it does not. */
+export const EXACT_SCOPE = {
+  tested: 'every leg of the route dry-run on its own pool in the current block: the output the pools would pay',
+  notTested: 'the token transfer itself: no tokens move from a holder, so a token that blocks, taxes or redirects its own '
+    + 'transfer still quotes here. To test that, simulate the swap transaction from the holder on your node.',
+} as const;
+
+/** 2.x takes the protocol fee where its Router takes it: on the output of a single hop, on the
+ *  INPUT of the anchor hop of a multi-hop route (every hop when none is a bridge). On a 2.x
+ *  multi-hop route every figure in the route is therefore already net, and exactOut is the total. */
+const feeOnHopInput = (req: PreparedRequest, route: Route): boolean => isV2(req.version) && route.hops.length > 1;
+
+/** previewPlanExact by construction: the route connects the request and spends at most its
+ *  amountIn on hop 0; each hop's output is the sum of its legs and is the next hop's input (on a
+ *  2.x multi-hop route, a charged hop's input is that output less the fee); the last hop's output
+ *  is route.totalOut == route.singleOut. The scalar: gross on 1.x (measured on the deployed
+ *  Quoters); on 2.x net — the total less the fee rounded up on one hop, the total itself on more. */
+export function exactMismatches(route: Route, exactOut: bigint, req: PreparedRequest): string[] {
+  const out: string[] = [];
+  const h = route.hops;
+  const onInput = feeOnHopInput(req, route);
+  if (!routeIsConsistent(route, req.tokenIn, req.tokenOut)) out.push('route does not connect tokenIn → tokenOut');
+  if (overspends(route, BigInt(req.amountIn))) out.push('route spends more than the requested amountIn');
+  h.forEach((hop, i) => {
+    if (hop.legs.reduce((s, l) => s + l.expectedOut, 0n) !== hop.expectedOut) out.push(`hop ${i} output is not the sum of its legs`);
+    if (i === 0) return;
+    const prev = h[i - 1].expectedOut;
+    if (hop.amountIn !== prev && !(onInput && hop.amountIn === prev - protocolFeeOn(prev))) {
+      out.push(`hop ${i} input is not hop ${i - 1} output${onInput ? ' (nor that output net of the fee)' : ''}`);
+    }
+  });
+  if (h.length > 0 && h[h.length - 1].expectedOut !== route.totalOut) out.push('totalOut is not the last hop output');
+  if (route.singleOut !== route.totalOut) out.push('singleOut is not totalOut');
+  const v2 = isV2(req.version);
+  const want = onInput ? route.totalOut : v2 ? route.totalOut - protocolFeeOn(route.totalOut) : route.totalOut;
+  if (exactOut !== want) {
+    out.push(onInput ? 'exactOut is not the route total (2.x multi-hop: the fee is already out)'
+      : v2 ? 'exactOut is not totalOut net of the protocol fee' : 'exactOut is not the route total');
+  }
+  return out;
+}
+
+export function decodeQuote(rawReq: unknown, rawResult: unknown, nowSec = Math.floor(Date.now() / 1000)):
   | { ok: true; body: Record<string, unknown> }
   | Fail {
   const parsed = parsePreparedRequest(rawReq);
@@ -324,12 +394,34 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown):
   try {
     if (req.fn === 'previewPlanExact') {
       const [route, exactOut] = decodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlanExact', data: result }) as unknown as [Route, bigint];
+      if (route.hops.length === 0 && exactOut === 0n) {
+        return { ok: false, status: 422, code: 'no_route', message: 'the Quoter found no route on your node (empty route)' };
+      }
+      const mismatch = exactMismatches(route, exactOut, req);
+      if (mismatch.length) {
+        return { ok: false, status: 422, code: 'result_mismatch', message: `result is not the Quoter's answer to this request: ${mismatch.join(', ')}` };
+      }
+      // amountOut is net of the protocol fee on every path (the documented contract).
+      // On a 2.x multi-hop route the fee was taken from an input, in another token: there is
+      // no gross output to report, so the fee fields say where it was taken instead.
+      const fees = feeOnHopInput(req, route)
+        ? { amountOut: exactOut.toString(), quote: { netOut: exactOut.toString(), feeBps: SITE.protocol.feeBps, feeTakenOn: 'anchor-hop input' } }
+        : (() => {
+            const gross = route.totalOut;
+            const fee = protocolFeeOn(gross);
+            return {
+              amountOut: (gross - fee).toString(),
+              grossAmountOut: gross.toString(),
+              quote: { grossOut: gross.toString(), protocolFee: fee.toString(), netOut: (gross - fee).toString(), feeBps: SITE.protocol.feeBps, feeTakenOn: 'output' },
+            };
+          })();
       return {
         ok: true,
         body: {
           ok: true, mode: 'exact', chainId: req.chainId, protocolVersion: req.version,
           tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: req.amountIn,
-          amountOut: exactOut.toString(), route: jsonSafe(route), wrapRequired: req.nativeIn && !isV2(req.version), meta,
+          ...fees,
+          route: jsonSafe(route), exact: EXACT_SCOPE, wrapRequired: req.nativeIn && !isV2(req.version), meta,
         },
       };
     }
@@ -340,6 +432,10 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown):
       [pv, quoterCall] = decodeFunctionResult({ abi: QUOTER_ABI, functionName: req.fn, data: result }) as unknown as [Preview, Hex];
     } else {
       [pv] = decodeFunctionResult({ abi: QUOTER_ABI, functionName: req.fn, data: result }) as unknown as [Preview];
+    }
+    const mismatch = previewMismatches(pv, req);
+    if (mismatch.length) {
+      return { ok: false, status: 422, code: 'result_mismatch', message: `result is not the Quoter's answer to this request: ${mismatch.join(', ')}` };
     }
     const checks = phoenixChecks(pv, req.tokenIn, req.tokenOut, 'Quoter preview via eth_call on YOUR node, decoded by the site');
 
@@ -353,7 +449,16 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown):
       const userMinOut = req.userMinOut ? BigInt(req.userMinOut) : 0n;
       minOut = minOutFor(pv.netOut, req.slippageBps ?? DEFAULT_SLIPPAGE_BPS, pv.effectiveMinOut);
       if (userMinOut > minOut) minOut = userMinOut;
-      if (!pv.canExecute || !checks.routeShape.consistent) {
+      if (deadline <= BigInt(nowSec)) {
+        txError = { code: 'deadline_passed', message: 'request.deadline is not in the future — prepare again; no transaction is emitted' };
+      } else if (userMinOut === 0n) {
+        // The result is caller-supplied and this decode is pure: it cannot tell your node's
+        // answer from a forged but self-consistent one, so a minimum derived only from the
+        // result protects nothing (Dex bounty L87; root reported 2026-10-06). Calldata is
+        // emitted only under a floor the caller pinned from its own source.
+        minOut = undefined;
+        txError = { code: 'min_required', message: 'decode cannot authenticate the result (no RPC): prepare again with userMinOut set from a source you trust — e.g. this quote checked against an independent price — to get a transaction' };
+      } else if (!pv.canExecute || !checks.routeShape.consistent) {
         txError = { code: 'not_executable', message: 'the Quoter says this route cannot execute now — no transaction is emitted' };
       } else if (quoterCall !== undefined) {
         if (quoterCall === '0x') {
@@ -418,6 +523,7 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown):
         tokenOut: req.tokenOut,
         amountIn: req.amountIn,
         amountOut: pv.netOut.toString(),
+        grossAmountOut: pv.grossOut.toString(),
         quote: {
           grossOut: pv.grossOut.toString(),
           protocolFee: pv.protocolFee.toString(),

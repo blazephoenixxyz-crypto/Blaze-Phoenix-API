@@ -25,7 +25,7 @@ import {
 } from './quoteApi';
 import { handleOpenapi } from './openapi';
 import { handleSolvencyReport, handleBadge } from './solvency';
-import { handleMcp } from './mcp';
+import { handleMcp, MCP_CORS_HEADERS } from './mcp';
 import { markdownMirrorPath } from './negotiate';
 import { handleVerify } from './verify';
 import { classifyRequest, type RequestClass } from './requestClass';
@@ -99,7 +99,7 @@ export default {
     if (path === '/mcp') {
       try { return await handleMcp(request); } catch {
         return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'internal error' } }), {
-          status: 500, headers: { 'content-type': 'application/json' },
+          status: 500, headers: { 'content-type': 'application/json', ...MCP_CORS_HEADERS },
         });
       }
     }
@@ -115,7 +115,7 @@ export default {
         ' | _ \\ / _` |_ / -_) |  _/ ' + "'" + ' \\/ _ \\/ -_) ' + "'" + ' \\| \\ \\ /',
         ' |___/_\\__,_/__\\___| |_| |_||_\\___/\\___|_||_|_/_\\_\\',
         '',
-        ' On-chain DEX aggregator · Base | Ethereum | Optimism | Arbitrum',
+        ' On-chain DEX aggregator · Base | Ethereum | Optimism | Arbitrum | Robinhood Chain',
         ' compute, don\'t trust — the quote IS the execution logic.',
         '',
         ' [Solvency]  cast call 0x3f60C7aa0c36a78D200405feBE143d2Cf3fA0c77 \\',

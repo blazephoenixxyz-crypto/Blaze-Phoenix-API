@@ -19,5 +19,7 @@ const ALIASES: Record<string, SupportedChainId> = {
 /** Resolve a user-supplied chain token ("base", "8453", "eth"…) or undefined. */
 export function resolveChainParam(v: string | null | undefined): SupportedChainId | undefined {
   if (!v) return undefined;
-  return ALIASES[v.trim().toLowerCase()];
+  const k = v.trim().toLowerCase();
+  // Own keys only: `__proto__` or `constructor` must not resolve through the prototype.
+  return Object.prototype.hasOwnProperty.call(ALIASES, k) ? ALIASES[k] : undefined;
 }

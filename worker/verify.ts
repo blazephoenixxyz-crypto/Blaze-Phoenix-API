@@ -140,10 +140,21 @@ export async function handleVerify(url: URL, env: AssetsEnv): Promise<Response> 
         decoded = values.length === 1 ? values[0] : values;
       } catch { /* leave raw only */ }
     }
+    // What `ok: true` attests is the read below and nothing more. A claim can say more than one
+    // zero-argument call can check, so the response states the read in a sentence and marks the
+    // claim as context; the rest of the claim is reproduced from `reproduce`.
+    const n = block?.result ? parseInt(block.result, 16) : null;
+    const shown = decoded === null
+      ? String(call.result)
+      : typeof decoded === 'object'
+        ? JSON.stringify(decoded, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))
+        : String(decoded);
     return json(200, {
       ok: true,
       id: fact.id,
+      verifies: `${exec.method}() on ${exec.to} returned ${shown}${n !== null ? ` at block ${n}` : ''}; that return value is all this read checks.`,
       claim: fact.claim,
+      claimScope: 'context: not verified by this read beyond the return value above; reproduce the rest from `reproduce`',
       verified: {
         to: exec.to,
         method: `${exec.method}()`,
