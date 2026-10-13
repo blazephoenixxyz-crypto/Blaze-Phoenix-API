@@ -35,7 +35,8 @@ import {
   getAddress,
 } from 'viem';
 import { QUOTER_ABI, ROUTER_ABI, CORE_ABI, HUB_ABI, SOLVER_ABI, BLAZE_ERRORS_ABI, ABI_SOURCE_REVISION } from '../src/abis/blaze';
-import { CHAINS, CHAIN_ORDER, isDexLive, alchemyFor, DRPC, type SupportedChainId } from '../src/config/chains';
+import { CHAINS, CHAIN_ORDER, isDexLive, type SupportedChainId } from '../src/config/chains';
+import { keyedRpcs } from './providerKeys';
 import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
   prepareQuote, decodeQuote, registryDocument, phoenixChecks, RPC_REQUIRED_MESSAGE, type Preview,
@@ -863,8 +864,7 @@ export async function rpcJson(chainId: SupportedChainId, method: string, params:
   // runs at most once per five minutes per chain on a cache miss.
   const ladder = [
     ...CHAINS[chainId].rpcs.slice(0, 4),
-    ...alchemyFor(chainId).slice(0, 1),
-    DRPC[chainId],
+    ...keyedRpcs(chainId),
   ].filter((u, i, a) => u && a.indexOf(u) === i);
   for (const rpc of ladder) {
     const ctrl = new AbortController();
