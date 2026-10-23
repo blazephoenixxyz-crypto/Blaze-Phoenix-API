@@ -94,6 +94,7 @@ values and the parameter description above.
 ## Security
 
 To report a vulnerability, see [SECURITY.md](./SECURITY.md).
+This API is in scope of the public [bug bounty](https://blazephoenix.xyz/bounty).
 
 Related repositories:
 [SDK](https://github.com/blazephoenixxyz-crypto/SDK) ·
