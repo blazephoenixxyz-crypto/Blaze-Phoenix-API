@@ -99,6 +99,16 @@ export function routeIsConsistent(route: Route, tokenIn: string, tokenOut: strin
   return h.every((x) => x.legs.length > 0);
 }
 
+/** The Phoenix Check of an exact result. The route already passed `exactMismatches` (it connects
+ *  tokenIn to tokenOut and matches the request), so the verdict is the price-impact one. The Router's
+ *  on-chain floor is not part of previewPlanExact, hence no ironFloor block here. */
+export function exactChecks(route: Route, tokenIn: string, tokenOut: string) {
+  // Same producer as the preview path. The route already passed `exactMismatches`, so it can execute
+  // as far as this read can tell; the Router's floor belongs to the swap itself, not to this read.
+  const c = phoenixChecks({ route, canExecute: true, ironFloor: 0n, effectiveMinOut: 0n } as unknown as Preview, tokenIn, tokenOut, 'previewPlanExact');
+  return { verdict: c.verdict, basis: 'previewPlanExact', priceImpact: c.priceImpact, routeShape: c.routeShape };
+}
+
 export function phoenixChecks(pv: Preview, tokenIn: string, tokenOut: string, basis: string) {
   const impactBps = Math.min(10_000, Math.max(0, Number(pv.route.expectedImpactBps) || 0));
   const consistent = routeIsConsistent(pv.route, tokenIn, tokenOut);
@@ -257,6 +267,10 @@ function sigOf(fn: QuoterFn): string {
 
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const INT = /^\d{1,78}$/;
+export const UINT256_MAX = (1n << 256n) - 1n;
+/** The ONE integer-string rule of the API: decimal digits, no sign, and <= 2^256-1 (78 digits alone
+ *  admit values above it). Every entry point (REST, decode, the OpenAPI pattern's limit) shares it. */
+export const isUint256Str = (s: string): boolean => INT.test(s) && BigInt(s) <= UINT256_MAX;
 const FNS: readonly QuoterFn[] = ['previewPlan', 'previewPlanWithMinOut', 'previewPlanExact', 'previewAndEncode', 'previewAndEncodeWithMinOut'];
 
 type Fail = { ok: false; status: number; code: string; message: string };
@@ -274,10 +288,10 @@ export function parsePreparedRequest(raw: unknown): { ok: true; req: PreparedReq
   if (typeof r.fn !== 'string' || !FNS.includes(r.fn as QuoterFn)) return bad('bad_request', 'request.fn is not a Quoter preview function');
   if (typeof r.tokenIn !== 'string' || !HEX_ADDR.test(r.tokenIn)) return bad('bad_token_in', 'request.tokenIn must be an address');
   if (typeof r.tokenOut !== 'string' || !HEX_ADDR.test(r.tokenOut)) return bad('bad_token_out', 'request.tokenOut must be an address');
-  if (typeof r.amountIn !== 'string' || !INT.test(r.amountIn) || BigInt(r.amountIn) === 0n) return bad('bad_amount', 'request.amountIn must be a positive integer string');
-  if (r.userMinOut !== undefined && (typeof r.userMinOut !== 'string' || !INT.test(r.userMinOut))) return bad('bad_request', 'request.userMinOut must be an integer string');
+  if (typeof r.amountIn !== 'string' || !isUint256Str(r.amountIn) || BigInt(r.amountIn) === 0n) return bad('bad_amount', 'request.amountIn must be a positive integer string');
+  if (r.userMinOut !== undefined && (typeof r.userMinOut !== 'string' || !isUint256Str(r.userMinOut))) return bad('bad_request', 'request.userMinOut must be an integer string');
   if (r.recipient !== undefined && (typeof r.recipient !== 'string' || !HEX_ADDR.test(r.recipient))) return bad('bad_recipient', 'request.recipient must be an address');
-  if (r.deadline !== undefined && (typeof r.deadline !== 'string' || !INT.test(r.deadline))) return bad('bad_deadline', 'request.deadline must be unix seconds');
+  if (r.deadline !== undefined && (typeof r.deadline !== 'string' || !isUint256Str(r.deadline))) return bad('bad_deadline', 'request.deadline must be unix seconds');
   if (r.slippageBps !== undefined && (!Number.isInteger(r.slippageBps) || (r.slippageBps as number) < 0 || (r.slippageBps as number) > 5_000)) {
     return bad('bad_slippage', 'request.slippageBps must be an integer between 0 and 5000');
   }
@@ -370,7 +384,13 @@ export function exactMismatches(route: Route, exactOut: bigint, req: PreparedReq
   if (route.singleOut !== route.totalOut) out.push('singleOut is not totalOut');
   const v2 = isV2(req.version);
   const want = onInput ? route.totalOut : v2 ? route.totalOut - protocolFeeOn(route.totalOut) : route.totalOut;
-  if (exactOut !== want) {
+  // 2.x: exactOut is a FLOOR within one fee of the bound. The Quoter's funding pass re-prices the route
+  // on the venues as the Router funds it (the fee comes off the input where the Router takes it there,
+  // and a venue's output is a step function of its input), so the scalar can sit a few wei under
+  // `want`, never above it, and never a whole extra fee under it (that would be a second deduction).
+  // 1.x returns the dry-run total itself: equality.
+  const wrong = v2 ? exactOut > want || exactOut <= want - protocolFeeOn(want) : exactOut !== want;
+  if (wrong) {
     out.push(onInput ? 'exactOut is not the route total (2.x multi-hop: the fee is already out)'
       : v2 ? 'exactOut is not totalOut net of the protocol fee' : 'exactOut is not the route total');
   }
@@ -421,7 +441,7 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown, nowSec = Math.f
           ok: true, mode: 'exact', chainId: req.chainId, protocolVersion: req.version,
           tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: req.amountIn,
           ...fees,
-          route: jsonSafe(route), exact: EXACT_SCOPE, wrapRequired: req.nativeIn && !isV2(req.version), meta,
+          route: jsonSafe(route), exact: EXACT_SCOPE, checks: exactChecks(route, req.tokenIn, req.tokenOut), wrapRequired: req.nativeIn && !isV2(req.version), meta,
         },
       };
     }

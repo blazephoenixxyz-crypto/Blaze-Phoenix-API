@@ -156,7 +156,7 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'userMinOut', in: 'query', required: false,
-    description: 'explicit minimum output (base units) — tightens the on-chain floor',
+    description: 'explicit minimum output (base units) — tightens the on-chain floor; at most 2^256-1',
     schema: { type: 'string', pattern: '^[0-9]{1,78}$' },
   },
   {

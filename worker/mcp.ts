@@ -14,7 +14,7 @@
 //  calldata. Same contract as the REST API (worker/codec.ts); never throws.
 // =============================================================================
 
-import { CORS_HEADERS, prepareFromParams } from './quoteApi';
+import { CORS_HEADERS, prepareFromParams, readJsonBody } from './quoteApi';
 import { decodeQuote, registryDocument } from './codec';
 import { QUOTER_ABI, ROUTER_ABI, SOLVER_ABI, HUB_ABI, CORE_ABI, BLAZE_ERRORS_ABI, ABI_SOURCE_REVISION } from '../src/abis/blaze';
 
@@ -192,7 +192,14 @@ export async function handleMcp(request: Request): Promise<Response> {
   }
 
   let msg: { jsonrpc?: string; id?: unknown; method?: string; params?: Json };
-  try { msg = await request.json(); } catch { return rpcError(null, -32700, 'parse error'); }
+  // Same body ceiling as the REST endpoints (512 KiB), applied before anything is parsed.
+  const body = await readJsonBody(request);
+  if (!body.ok) {
+    return body.code === 'too_large'
+      ? rpcError(null, -32600, body.message, 413)
+      : rpcError(null, -32700, 'parse error');
+  }
+  msg = body.value as typeof msg;
   if (Array.isArray(msg)) return rpcError(null, -32600, 'batching not supported');
 
   const { id, method, params } = msg;
