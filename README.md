@@ -17,6 +17,14 @@ and verified calldata. The SDK and the local MCP server do both steps in-process
 The legacy relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) are retired:
 they answer `400 rpc_required` with the prepared call inline.
 
+## Networks and versions
+
+Protocol V1 is live on Base (8453), Ethereum (1), Optimism (10), Arbitrum (42161) and
+Robinhood Chain (4663). V2 (Router, Solver, Hub, Quoter and Gate, with the Core and Math
+libraries) is pending, so `GET /api/deployments` lists it as pending, and it is not planned
+for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version
+such as `2.0.0`); without it, each chain uses its newest deployed version.
+
 ## Cost, what you bring, limits
 
 - **Free and keyless.** No API key, no signup, open CORS.
