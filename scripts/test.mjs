@@ -40,5 +40,12 @@ check('block times: one table, Robinhood 0.104 s, read by the API',
 check('exact decode: the envelope carries checks, and 2.x exactOut is a floor within one fee of the bound',
   /checks: exactChecks\(/.test(codec) && /exactOut <= want - protocolFeeOn\(want\)/.test(codec));
 
+// V2 (2.0.0, pending) is not deployed to Ethereum L1; V1 on Ethereum stays live.
+const dep = read('src/config/deployments.ts');
+const v2 = dep.slice(dep.indexOf("version: '2.0.0'"), dep.indexOf("version: '1.0.0'"));
+const v1 = dep.slice(dep.indexOf("version: '1.0.0'"));
+check('registry: 2.0.0 carries no chain 1 entry', v2.includes('chains:') && !/^\s*1:\s*[{]/m.test(v2));
+check('registry: 1.0.0 still lists chain 1', /^\s*1:\s*[{]/m.test(v1));
+
 console.log(failed === 0 ? `✅ ${passed} passed, 0 failed` : `❌ ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

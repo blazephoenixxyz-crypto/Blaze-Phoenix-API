@@ -47,7 +47,7 @@ export interface DeploymentVersion {
   /** Blaze-Phoenix-Dex revision the bytecode was built from. */
   source?: string;
   notes?: string;
-  chains: Record<DeployedChainId, ContractSet>;
+  chains: Partial<Record<DeployedChainId, ContractSet>>;
 }
 
 const PENDING: ContractSet = { core: ZERO, hub: ZERO, solver: ZERO, router: ZERO, quoter: ZERO };
@@ -61,11 +61,10 @@ export const DEPLOYMENTS: { schema: 1; updatedAt: string; versions: DeploymentVe
     {
       version: '2.0.0',
       status: 'pending',
-      source: 'blazephoenixxyz-crypto/Blaze-Phoenix-Dex@07c8563',
+      source: 'blazephoenixxyz-crypto/Blaze-Phoenix-Dex@f746a48',
       notes: 'Final generation: Core, Hub, Solver, Quoter (previewAndEncode, batchQuote), Router (native entry, swapBestExactIn, ExecutionProof).',
       chains: {
         8453: { ...PENDING },
-        1: { ...PENDING },
         10: { ...PENDING },
         42161: { ...PENDING },
         4663: { ...PENDING },
@@ -144,7 +143,7 @@ export function deployedVersions(chainId: DeployedChainId): DeploymentVersion[] 
 export function activeDeployment(chainId: DeployedChainId): { version: string; contracts: ContractSet } {
   const v = deployedVersions(chainId)[0];
   return v
-    ? { version: v.version, contracts: { ...v.chains[chainId] } }
+    ? { version: v.version, contracts: { ...(v.chains[chainId] as ContractSet) } }
     : { version: '1.0.0', contracts: { ...PENDING } };
 }
 
