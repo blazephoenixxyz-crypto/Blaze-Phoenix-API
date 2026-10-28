@@ -36,10 +36,11 @@ import {
 } from 'viem';
 import { QUOTER_ABI, ROUTER_ABI, CORE_ABI, HUB_ABI, SOLVER_ABI, BLAZE_ERRORS_ABI, ABI_SOURCE_REVISION } from '../src/abis/blaze';
 import { CHAINS, CHAIN_ORDER, isDexLive, type SupportedChainId } from '../src/config/chains';
+import { BLOCK_TIME_SEC } from '../src/config/blockTime';
 import { keyedRpcs } from './providerKeys';
 import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
-  prepareQuote, decodeQuote, registryDocument, phoenixChecks, RPC_REQUIRED_MESSAGE, type Preview,
+  prepareQuote, decodeQuote, registryDocument, phoenixChecks, isUint256Str, RPC_REQUIRED_MESSAGE, type Preview,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
 import { SITE } from '../src/config/site';
@@ -92,7 +93,6 @@ const err = (status: number, code: string, message: string): ParseResult =>
   ({ ok: false, status, code, message });
 
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
-const INT = /^[0-9]{1,77}$/; // < 78 digits always fits uint256's 78-digit ceiling
 
 /** Resolve a token param: 0x-address, or the universal symbols every chain
  *  config carries (ETH → native sentinel, WETH, USDC, BZPX where live). */
@@ -148,7 +148,7 @@ export function parseQuoteParams(searchParams: URLSearchParams): ParseResult {
   }
 
   const rawAmt = searchParams.get('amountIn') ?? searchParams.get('amount');
-  if (!rawAmt || !INT.test(rawAmt.trim())) {
+  if (!rawAmt || !isUint256Str(rawAmt.trim())) {
     return err(400, 'bad_amount',
       'amountIn must be a positive integer in the token’s base units (wei-style)');
   }
@@ -185,7 +185,7 @@ export function parseQuoteParams(searchParams: URLSearchParams): ParseResult {
   let userMinOut: bigint | undefined;
   const rawMin = searchParams.get('userMinOut');
   if (rawMin !== null) {
-    if (!INT.test(rawMin.trim())) return err(400, 'bad_min_out', 'userMinOut must be an integer in tokenOut base units');
+    if (!isUint256Str(rawMin.trim())) return err(400, 'bad_min_out', 'userMinOut must be an integer in tokenOut base units');
     userMinOut = BigInt(rawMin.trim());
   }
 
@@ -555,7 +555,7 @@ export async function handleDecode(request: Request): Promise<Response> {
  *  bounding is how much of it a single request can buy. */
 const MAX_BODY_BYTES = 512 * 1024;
 export const MAX_PREPARE_BATCH = 32;
-async function readJsonBody(request: Request): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }> {
+export async function readJsonBody(request: Request): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }> {
   const len = Number(request.headers.get('content-length') ?? 0);
   if (len > MAX_BODY_BYTES) return { ok: false, code: 'too_large', message: `body over ${MAX_BODY_BYTES} bytes` };
   let text: string;
@@ -596,7 +596,7 @@ export async function handleQuoteFirstParty(url: URL): Promise<Response> {
     return json(400, { ok: false, code: 'chain_not_live', error: 'DEX not deployed on this chain yet' });
   }
   const rawAmt = url.searchParams.get('amountIn') ?? url.searchParams.get('amount');
-  if (!rawAmt || !INT.test(rawAmt.trim())) {
+  if (!rawAmt || !isUint256Str(rawAmt.trim())) {
     return json(400, { ok: false, code: 'bad_amount',
       error: 'amountIn must be a positive integer in the token’s base units (wei-style)' });
   }
@@ -828,9 +828,7 @@ const EXECUTION_PROOF_TOPIC0 = toEventSelector('ExecutionProof(address,address,u
 const STATS_SPAN: Record<SupportedChainId, bigint> = {
   1: 3_000n, 8453: 9_000n, 10: 9_000n, 42161: 9_500n, 4663: 9_000n,
 };
-const SECS_PER_BLOCK: Record<SupportedChainId, number> = {
-  1: 12, 8453: 2, 10: 2, 42161: 0.25, 4663: 2,
-};
+const SECS_PER_BLOCK: Record<SupportedChainId, number> = BLOCK_TIME_SEC;
 
 export async function rpcJson(chainId: SupportedChainId, method: string, params: unknown[]): Promise<unknown> {
   // FOUR endpoints, not two. The original budget was two, on the reasoning that

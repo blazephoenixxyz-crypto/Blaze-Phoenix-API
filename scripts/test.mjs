@@ -28,5 +28,17 @@ check('provider keys are blank in the published source',
   /ALCHEMY_KEYS[^=\n]*=\s*\[\s*\]/.test(chains) || /ALCHEMY_KEYS[^=\n]*=\s*['"]{2}/.test(chains));
 check('DRPC key is blank in the published source', /DRPC_KEY[^=\n]*=\s*['"]{2}/.test(chains));
 
+// One integer rule (<= 2^256-1), one body ceiling for REST and /mcp, one block-time table.
+const codec = read('worker/codec.ts');
+const api = read('worker/quoteApi.ts');
+check('integer rule: one shared uint256 check, no 77-digit regex left in quoteApi',
+  /export const isUint256Str/.test(codec) && !/\{1,77\}/.test(api) && /isUint256Str\(rawAmt/.test(api));
+check('/mcp reads its body through the same capped reader as REST (413)',
+  /readJsonBody\(request\)/.test(mcp) && /too_large[^\n]*\n?[^\n]*413|413/.test(mcp));
+check('block times: one table, Robinhood 0.104 s, read by the API',
+  /4663: 0\.104/.test(read('src/config/blockTime.ts')) && /BLOCK_TIME_SEC/.test(api) && !/4663: 2,/.test(api));
+check('exact decode: the envelope carries checks, and 2.x exactOut is a floor within one fee of the bound',
+  /checks: exactChecks\(/.test(codec) && /exactOut <= want - protocolFeeOn\(want\)/.test(codec));
+
 console.log(failed === 0 ? `✅ ${passed} passed, 0 failed` : `❌ ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
