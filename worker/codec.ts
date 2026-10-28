@@ -333,6 +333,55 @@ export function previewMismatches(pv: Preview, req: PreparedRequest): string[] {
   if (pv.netOut > pv.grossOut) out.push('netOut above grossOut');
   if (pv.canExecute && pv.netOut < pv.effectiveMinOut) out.push('executable below its own minimum');
   if (overspends(pv.route, BigInt(req.amountIn))) out.push('route spends more than the requested amountIn');
+  out.push(...routeSumMismatches(pv.route), ...packMismatches(pv, req.version));
+  return out;
+}
+
+/** The route's own sums, on the preview and on the exact pass alike: each hop's output is the
+ *  sum of its legs, and the last hop's output is route.totalOut. */
+function routeSumMismatches(route: Route): string[] {
+  const out: string[] = [];
+  route.hops.forEach((hop, i) => {
+    if (hop.legs.reduce((s, l) => s + l.expectedOut, 0n) !== hop.expectedOut) out.push(`hop ${i} output is not the sum of its legs`);
+  });
+  const last = route.hops[route.hops.length - 1];
+  if (last && last.expectedOut !== route.totalOut) out.push('totalOut is not the last hop output');
+  return out;
+}
+
+/** `_pack` caps the safety buffer at 10 bps. */
+const SAFETY_CAP_BPS = 10;
+
+/** The preview's numbers as `_pack` derives them from its route. On every version: grossOut is
+ *  route.totalOut; hops and legs count the route; protocolFee is the fee on grossOut; the safety
+ *  buffer is 1 bps per leg above two (capped) of what the fee leaves; netOut is what the buffer
+ *  leaves. 1.x rounds the fee and the buffer down (as measured on the deployed Quoters). 2.x rounds
+ *  them up, charges the fee once (or once per hop on a multi-hop route with no bridge to anchor
+ *  it), and adds 5 bps per leg priced on an assumed fee under the same cap, so its buffer is held
+ *  between the legs' share and the cap. */
+function packMismatches(pv: Preview, version: string): string[] {
+  const out: string[] = [];
+  const { route, grossOut } = pv;
+  const legs = route.hops.reduce((n, h) => n + h.legs.length, 0);
+  if (pv.hops !== BigInt(route.hops.length) || pv.legs !== BigInt(legs)) out.push('hops/legs are not the route counts');
+  if (grossOut !== route.totalOut) out.push('grossOut is not route.totalOut');
+  const v2 = isV2(version);
+  const part = (x: bigint, bps: number): bigint => (x * BigInt(bps) + (v2 ? 9_999n : 0n)) / 10_000n;
+  const feeCharged = (times: number): bigint => {
+    let left = grossOut;
+    for (let c = 0; c < times; c++) left -= part(left, SITE.protocol.feeBps);
+    return grossOut - left;
+  };
+  const fees = v2 && route.hops.length > 1 ? [feeCharged(1), feeCharged(route.hops.length)] : [feeCharged(1)];
+  if (!fees.includes(pv.protocolFee)) out.push('protocolFee is not the fee on grossOut');
+  const afterFee = grossOut > pv.protocolFee ? grossOut - pv.protocolFee : 0n;
+  const least = part(afterFee, Math.min(SAFETY_CAP_BPS, Math.max(0, legs - 2)));
+  if (v2 ? pv.safetyBuffer < least || pv.safetyBuffer > part(afterFee, SAFETY_CAP_BPS) : pv.safetyBuffer !== least) {
+    out.push('safetyBuffer is not the buffer for the route');
+  }
+  if (pv.netOut !== (afterFee > pv.safetyBuffer ? afterFee - pv.safetyBuffer : 0n)) {
+    out.push('netOut is not grossOut less protocolFee and safetyBuffer');
+  }
   return out;
 }
 
@@ -372,15 +421,14 @@ export function exactMismatches(route: Route, exactOut: bigint, req: PreparedReq
   const onInput = feeOnHopInput(req, route);
   if (!routeIsConsistent(route, req.tokenIn, req.tokenOut)) out.push('route does not connect tokenIn → tokenOut');
   if (overspends(route, BigInt(req.amountIn))) out.push('route spends more than the requested amountIn');
+  out.push(...routeSumMismatches(route));
   h.forEach((hop, i) => {
-    if (hop.legs.reduce((s, l) => s + l.expectedOut, 0n) !== hop.expectedOut) out.push(`hop ${i} output is not the sum of its legs`);
     if (i === 0) return;
     const prev = h[i - 1].expectedOut;
     if (hop.amountIn !== prev && !(onInput && hop.amountIn === prev - protocolFeeOn(prev))) {
       out.push(`hop ${i} input is not hop ${i - 1} output${onInput ? ' (nor that output net of the fee)' : ''}`);
     }
   });
-  if (h.length > 0 && h[h.length - 1].expectedOut !== route.totalOut) out.push('totalOut is not the last hop output');
   if (route.singleOut !== route.totalOut) out.push('singleOut is not totalOut');
   const v2 = isV2(req.version);
   const want = onInput ? route.totalOut : v2 ? route.totalOut - protocolFeeOn(route.totalOut) : route.totalOut;

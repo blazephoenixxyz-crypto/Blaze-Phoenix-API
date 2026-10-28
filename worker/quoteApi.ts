@@ -94,8 +94,13 @@ const err = (status: number, code: string, message: string): ParseResult =>
 
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 
+/** The symbol of each chain's dollar asset (`chain.usdc`): USDG on Robinhood Chain, USDC elsewhere. */
+const dollarSymbol = (chainId: SupportedChainId): 'USDC' | 'USDG' => (chainId === 4663 ? 'USDG' : 'USDC');
+
 /** Resolve a token param: 0x-address, or the universal symbols every chain
- *  config carries (ETH → native sentinel, WETH, USDC, BZPX where live). */
+ *  config carries (ETH → native sentinel, WETH, the dollar asset, BZPX where live).
+ *  A symbol resolves only to the token it names: the dollar asset answers to its own
+ *  symbol (`dollarSymbol`), so USDC does not resolve on Robinhood Chain, nor USDG elsewhere. */
 export function resolveTokenParam(
   v: string | null,
   chainId: SupportedChainId,
@@ -106,13 +111,26 @@ export function resolveTokenParam(
     try { return getAddress(s); } catch { return undefined; }
   }
   const chain = CHAINS[chainId];
-  switch (s.toUpperCase()) {
+  const sym = s.toUpperCase();
+  switch (sym) {
     case 'ETH': return NATIVE_ETH as `0x${string}`;
     case 'WETH': return chain.weth;
-    case 'USDC': return chain.usdc;
+    case 'USDC':
+    case 'USDG': return sym === dollarSymbol(chainId) ? chain.usdc : undefined;
     case 'BZPX': return chain.bzpx; // undefined off Base → clean 400 below
     default: return undefined;
   }
+}
+
+/** Why a token param did not resolve. USDC and USDG name two different tokens and each
+ *  chain carries one of them, so the other one is answered with the symbol to use. */
+function unresolvedToken(raw: string | null, chainId: SupportedChainId): string {
+  const sym = (raw ?? '').trim().toUpperCase();
+  const own = dollarSymbol(chainId);
+  if ((sym === 'USDC' || sym === 'USDG') && sym !== own) {
+    return `${sym} is not built in on ${CHAINS[chainId].name}, whose dollar asset is ${own} — pass ${own} or the 0x token address`;
+  }
+  return 'no traded token with this symbol found on this chain — pass the 0x token address';
 }
 
 
@@ -131,11 +149,11 @@ export function parseQuoteParams(searchParams: URLSearchParams): ParseResult {
   const tOut = resolveTokenParam(rawOut, chainId);
   if (!tIn) {
     return err(400, 'bad_token_in',
-      'tokenIn: no traded token with this symbol found on this chain — pass the 0x token address');
+      `tokenIn: ${unresolvedToken(rawIn, chainId)}`);
   }
   if (!tOut) {
     return err(400, 'bad_token_out',
-      'tokenOut: no traded token with this symbol found on this chain — pass the 0x token address');
+      `tokenOut: ${unresolvedToken(rawOut, chainId)}`);
   }
 
   const nativeIn = tIn.toLowerCase() === NATIVE_ETH.toLowerCase();
@@ -453,8 +471,10 @@ async function resolveUnknownSymbols(searchParams: URLSearchParams): Promise<{
     const key = keys.find((k) => searchParams.get(k) !== null);
     if (!key) return;
     const raw = (searchParams.get(key) ?? '').trim();
-    // Already an address or a built-in symbol → nothing to do.
-    if (!raw || resolveTokenParam(raw, chainId) || !SYMBOLISH.test(raw)) return;
+    // Already an address or a built-in symbol → nothing to do. USDC is not looked up by name
+    // either: where it is not built in (Robinhood Chain, whose dollar asset is USDG) the caller
+    // is told which symbol to use, never handed whatever token goes by that name.
+    if (!raw || resolveTokenParam(raw, chainId) || !SYMBOLISH.test(raw) || raw.toUpperCase() === 'USDC') return;
     const hit = await resolveSymbolCached(chainId, raw);
     if (hit) {
       sp.set(key, hit.address);
@@ -484,7 +504,7 @@ export function prepareFromParams(searchParams: URLSearchParams, nowSec = Math.f
     // (an outbound fetch per request). The integrator surface no longer
     // fetches anything, so it says what to pass instead.
     if (parsed.code === 'bad_token_in' || parsed.code === 'bad_token_out') {
-      return { ...parsed, message: `${parsed.message} (ETH, WETH, USDC and BZPX are built in; everything else by address)` };
+      return { ...parsed, message: `${parsed.message} (ETH, WETH, USDC (USDG on Robinhood Chain) and BZPX are built in; everything else by address)` };
     }
     return parsed;
   }
