@@ -17,6 +17,8 @@ curl -X POST https://blazephoenix.xyz/api/quote/decode -H 'content-type: applica
 
 In-process instead of HTTP: `npm i @blazephoenix/sdk viem`, or the local MCP server `npx -y @blazephoenix/mcp`, both reading your node from `BLAZEPHOENIX_RPC_URL` or `BLAZEPHOENIX_RPC_<CHAIN>`.
 
+Protocol V1 is live on all five chains; V2 (Router, Solver, Hub, Quoter and Gate with the Core and Math libraries) is pending and is not planned for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version such as `2.0.0`).
+
 Remote MCP tools: `prepare_quote`, `decode_quote`, `get_deployments`, `get_abi`.
 
 ## Docs
