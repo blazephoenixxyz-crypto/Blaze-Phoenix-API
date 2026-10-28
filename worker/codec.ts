@@ -73,7 +73,7 @@ export function resolveVersion(chainId: SupportedChainId, selector: string | nul
     const deployed = deployedVersions(chainId as DeployedChainId).map((x) => x.version);
     return { ok: false, code: 'not_deployed', message: `no deployment matching version "${sel}" on chain ${chainId} (deployed: ${deployed.join(', ') || 'none'})` };
   }
-  return { ok: true, version: v.version, contracts: { ...v.chains[chainId as DeployedChainId] } };
+  return { ok: true, version: v.version, contracts: { ...(v.chains[chainId as DeployedChainId] as ContractSet) } };
 }
 
 /** The registry document integrators (SDK 1.x, local MCP servers) consume. */
@@ -82,7 +82,7 @@ export function registryDocument() {
   const active: Record<string, { version: string; contracts: ContractSet }> = {};
   for (const id of Object.keys(CHAINS).map(Number) as SupportedChainId[]) {
     const v = deployedVersions(id as DeployedChainId)[0];
-    if (v) active[String(id)] = { version: v.version, contracts: { ...v.chains[id as DeployedChainId] } };
+    if (v) active[String(id)] = { version: v.version, contracts: { ...(v.chains[id as DeployedChainId] as ContractSet) } };
   }
   return { schema: 1 as const, updatedAt: DEPLOYMENTS.updatedAt, versions, active };
 }
