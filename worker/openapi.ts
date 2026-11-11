@@ -92,7 +92,7 @@ const QUOTE_SCHEMA = {
     },
     tx: {
       type: 'object',
-      description: 'present when `recipient` was prepared: unsigned, ready for sendTransaction. On 2.x the bytes are the Quoter\'s own (previewAndEncode), verified field by field.',
+      description: 'present when `recipient` was prepared: unsigned; it clears the swap math (canExecute), not the token transfer, so simulate it as an eth_call to the Router from the paying address before sending (executeWith.note). On 2.x the bytes are the Quoter\'s own (previewAndEncode), verified field by field.',
       properties: {
         to: { type: 'string', description: 'the Router of this version (re-resolved from the registry, never from the request)' },
         data: { type: 'string' },
@@ -146,7 +146,7 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'recipient', in: 'query', required: false,
-    description: '0x-address — response then includes ready-to-send tx calldata',
+    description: '0x-address — response then includes unsigned tx calldata (swap math only: simulate it from the payer before sending)',
     schema: { type: 'string' },
   },
   {
@@ -171,7 +171,7 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'exact', in: 'query', required: false,
-    description: 'exact=1 → previewPlanExact: every leg dry-run on its pool in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes',
+    description: 'exact=1 → previewPlanExact: every leg dry-run on its own venue in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes',
     schema: { type: 'string', enum: ['1'] },
   },
 ] as const;

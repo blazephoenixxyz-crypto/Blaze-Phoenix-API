@@ -6,7 +6,8 @@
 //
 //    prepare  (GET  /api/quote/prepare)  → the exact eth_call to run on your node
 //    decode   (POST /api/quote/decode)   → your node's answer → quote, Phoenix
-//                                          Check, and ready-to-sign calldata
+//                                          Check, and unsigned calldata (simulate
+//                                          it from the payer before sending)
 //
 //  Both are pure functions of their input: no fetch, no state, no key. The SDK
 //  and the local MCP server do the same thing in-process, without us at all.
@@ -398,6 +399,12 @@ function overspends(route: Route, amountIn: bigint): boolean {
 export const protocolFeeOn = (gross: bigint): bigint =>
   (gross * BigInt(SITE.protocol.feeBps) + 9_999n) / 10_000n;
 
+/** What calldata gated by canExecute covers, and what it does not: the swap math, not the
+ *  token transfer. The one answer to "do these bytes settle for this payer?" is the Router's
+ *  own eth_call from the payer. */
+export const TX_SCOPE = 'These bytes clear the swap math (canExecute), not the token transfer. Before sending, simulate '
+  + 'this tx as an eth_call to the Router from the paying address: the token can tax, cap a wallet or exempt addresses.';
+
 /** What previewPlanExact measures, and what it does not. */
 export const EXACT_SCOPE = {
   tested: 'every leg of the route dry-run on its own pool in the current block: the output the pools would pay',
@@ -618,7 +625,7 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown, nowSec = Math.f
         } : {}),
         wrapRequired: req.nativeIn && !isV2(req.version),
         unwrapAfter: req.nativeOut,
-        executeWith: { router: contracts.router, chainId: req.chainId },
+        executeWith: { router: contracts.router, chainId: req.chainId, ...(tx ? { note: TX_SCOPE } : {}) },
         meta,
       },
     };

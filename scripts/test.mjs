@@ -222,6 +222,22 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+// canExecute is swap math, not the token transfer. Every surface that hands out
+// calldata must say so and point to the Router eth_call from the payer, and must not
+// call the bytes ready to send.
+const oapi = read('worker/openapi.ts');
+check('no surface calls the calldata ready-to-send / signable / ready for sendTransaction',
+  ![api, codec, mcp, oapi].some((s) => /ready-to-send|ready-to-broadcast|ready-to-sign|signable calldata|ready for sendTransaction/.test(s)));
+check('one TX_SCOPE text names the Router eth_call from the payer and the token cases',
+  /export const TX_SCOPE = [^;]*eth_call to the Router from the paying address[^;]*tax, cap a wallet or exempt/.test(codec));
+check('decode preview carries TX_SCOPE beside every tx',
+  /executeWith: \{ router: contracts\.router, chainId: req\.chainId, \.\.\.\(tx \? \{ note: TX_SCOPE \} : \{\}\) \}/.test(codec));
+check('/api/quote carries TX_SCOPE in executeWith.note when it emits tx',
+  /tx \? ` \$\{TX_SCOPE\}` : ''/.test(api));
+check('hosted MCP recipient, decode_quote and instructions point to a simulation from the payer',
+  /recipient:[^\n]*simulate it as an eth_call to the Router from the payer/.test(mcp)
+  && /simulate it as an eth_call to the Router from the paying address/.test(mcp)
+  && /simulate that calldata from the paying address/.test(mcp));
 
 console.log(failed === 0 ? `✅ ${passed} passed, 0 failed` : `❌ ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

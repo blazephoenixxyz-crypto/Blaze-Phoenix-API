@@ -48,11 +48,11 @@ const QUOTE_PARAMS = {
   in: { type: 'string', description: 'input token — 0x address, or ETH / WETH / USDC / BZPX' },
   out: { type: 'string', description: 'output token — 0x address, or ETH / WETH / USDC / BZPX' },
   amountIn: { type: 'string', description: 'input amount in base units (wei-style integer string)' },
-  recipient: { type: 'string', description: 'optional 0x address; with it, decode_quote returns signable calldata' },
+  recipient: { type: 'string', description: 'optional 0x address; with it, decode_quote returns unsigned calldata that clears the swap math; simulate it as an eth_call to the Router from the payer before sending' },
   slippageBps: { type: 'integer', description: '0–5000 (default 50); never below the on-chain floor' },
   userMinOut: { type: 'string', description: 'optional explicit minimum output, base units' },
   deadlineSec: { type: 'integer', description: 'deadline horizon in seconds, 10–3600 (default 120)' },
-  exact: { type: 'boolean', description: 'true → previewPlanExact: every leg dry-run on its pool in this block (no calldata). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes; simulate the swap from the holder to test that' },
+  exact: { type: 'boolean', description: 'true → previewPlanExact: every leg dry-run on its own venue in this block (no calldata). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes; simulate the swap from the holder to test that' },
   version: { type: 'string', description: 'protocol version: latest (default) | 1 | 2 | 2.0.0' },
 } as const;
 
@@ -87,7 +87,8 @@ export const MCP_TOOLS = [
     description:
       'Decode the eth_call result YOUR node returned for a prepare_quote call: net output after the 0.28% fee, the minimum the '
       + 'Router enforces on-chain, price impact, the Phoenix Check verdict (ok / caution / danger / blocked — fails closed) '
-      + 'and, with a recipient, verified unsigned calldata. Pure computation.',
+      + 'and, with a recipient, unsigned calldata verified against the request. It clears the swap math, not the token transfer: '
+      + 'before sending, simulate it as an eth_call to the Router from the paying address (a token can tax, cap a wallet or exempt addresses). Pure computation.',
     inputSchema: {
       type: 'object',
       required: ['request', 'result'],
@@ -224,7 +225,8 @@ export async function handleMcp(request: Request): Promise<Response> {
         instructions:
           'BlazePhoenix on-chain DEX aggregator (Base, Ethereum, Optimism, Arbitrum, Robinhood Chain). Quotes run on the '
           + 'user\'s OWN RPC — this hosted endpoint performs no RPC: prepare_quote gives the exact eth_call to run on the '
-          + 'user\'s node, decode_quote turns the result into the quote, the Phoenix Check and verified calldata.',
+          + 'user\'s node, decode_quote turns the result into the quote, the Phoenix Check and calldata verified against the request; '
+          + 'simulate that calldata from the paying address before sending.',
       });
     }
     if (method === 'ping') return rpcResult(id, {});

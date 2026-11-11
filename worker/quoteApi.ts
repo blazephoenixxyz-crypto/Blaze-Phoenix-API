@@ -40,7 +40,7 @@ import { BLOCK_TIME_SEC } from '../src/config/blockTime';
 import { keyedRpcs } from './providerKeys';
 import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
-  prepareQuote, decodeQuote, registryDocument, phoenixChecks, isUint256Str, RPC_REQUIRED_MESSAGE, type Preview,
+  prepareQuote, decodeQuote, registryDocument, phoenixChecks, isUint256Str, RPC_REQUIRED_MESSAGE, TX_SCOPE, type Preview,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
 import { SITE } from '../src/config/site';
@@ -761,7 +761,8 @@ async function execQuote(p: QuoteParams): Promise<{ status: number; body: Record
       effectiveMinOut: bigint; estGas: bigint; hops: bigint; legs: bigint; canExecute: boolean;
     }, unknown, boolean];
 
-    // Optional ready-to-broadcast calldata (ERC-20 input only — native ETH
+    // Optional unsigned calldata, gated by canExecute = swap math only (TX_SCOPE;
+    // ERC-20 input only — native ETH
     // needs a WETH wrap first, which is the caller's move).
     let tx: { to: `0x${string}`; data: `0x${string}`; value: '0' } | undefined;
     if (p.recipient && !p.nativeIn && pv.canExecute) {
@@ -821,7 +822,7 @@ async function execQuote(p: QuoteParams): Promise<{ status: number; body: Record
         function: 'swapExactIn(route, amountIn, userMinOut, recipient, deadline)',
         note: p.nativeIn
           ? 'native ETH input: wrap to WETH first (WETH.deposit), then approve + swap'
-          : 'approve the router (or use Permit2) for tokenIn, then send tx.data to router',
+          : `approve the router (or use Permit2) for tokenIn, then send tx.data to router.${tx ? ` ${TX_SCOPE}` : ''}`,
       },
       meta: { quotedAt: Date.now(), latencyMs, rpcTried: call.rpcTried, rpc: 'first-party' },
     } };
