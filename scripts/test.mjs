@@ -245,6 +245,35 @@ try {
   check('exact: the route decodes on the exact pass, and not with a hop output off the sum of its legs',
     xOk.ok && !xOff.ok && xOff.code === 'result_mismatch' && /sum of its legs/.test(xOff.message));
 
+  // Calldata is emitted only for a preview prepared with a recipient AND a non-zero userMinOut
+  // (decode is pure: a minimum derived from the answer alone protects nothing). The minimum in
+  // the calldata is the greatest of userMinOut, netOut less slippage and the on-chain floor,
+  // and exact mode never emits calldata. Documented in README, llms.txt and the OpenAPI.
+  const NOW = 1_800_000_000;
+  const rcpt = '0x00000000000000000000000000000000000000b1';
+  const txReq = (bps, umo) => ({ ...req1, ...(umo ? { fn: 'previewPlanWithMinOut', userMinOut: umo.toString() } : {}), recipient: rcpt, slippageBps: bps, deadline: String(NOW + 120) });
+  const decodeTx = (umo, bps = 50) => {
+    const r = txReq(bps, umo);
+    const pv = preview(live, pack(live, down), umo ?? 0n);
+    return decodeQuote(r, encodeFunctionResult({ abi: QUOTER_ABI, functionName: r.fn, result: [pv, pv.route, false] }), NOW);
+  };
+  const noUmo = decodeTx(undefined);
+  check('calldata: a recipient without userMinOut emits no tx and answers txError min_required',
+    noUmo.ok && noUmo.body.tx === undefined && noUmo.body.minOut === undefined && noUmo.body.txError?.code === 'min_required');
+  const netMinusSlip = 2_310_265_267n - (2_310_265_267n * 50n) / 10_000n;
+  const mAbove = decodeTx(2_300_000_000n);
+  check('calldata: userMinOut above netOut less slippage -> tx minOut is userMinOut',
+    mAbove.ok && mAbove.body.tx !== undefined && mAbove.body.minOut === '2300000000');
+  const mBelow = decodeTx(2_290_000_000n);
+  check('calldata: userMinOut below netOut less slippage -> tx minOut is netOut less slippage',
+    mBelow.ok && mBelow.body.tx !== undefined && mBelow.body.minOut === netMinusSlip.toString());
+  const mFloor = decodeTx(1n, 5000);
+  check('calldata: slippage and userMinOut both under the on-chain floor -> tx minOut is the floor',
+    mFloor.ok && mFloor.body.tx !== undefined && mFloor.body.minOut === live.singleOutFloor.toString());
+  const xTx = decodeQuote({ ...req1, fn: 'previewPlanExact', userMinOut: '2290000000', recipient: rcpt, slippageBps: 50, deadline: String(NOW + 120) },
+    encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlanExact', result: [{ ...live, singleOut: live.totalOut }, live.totalOut] }), NOW);
+  check('calldata: exact mode with a recipient and userMinOut emits no tx', xTx.ok && xTx.body.mode === 'exact' && xTx.body.tx === undefined);
+
   // 2.x, with the registry holding a Base 2.0.0 set for these checks: the fee and the buffer
   // round up; the fee is charged once, or once per hop on a multi-hop route that holds no
   // bridge; legs priced on an assumed fee add to the buffer, under the same 10 bps cap.
@@ -301,6 +330,14 @@ check('hosted MCP recipient, decode_quote and instructions point to a simulation
   /recipient:[^\n]*simulate it as an eth_call to the Router from the payer/.test(mcp)
   && /simulate it as an eth_call to the Router from the paying address/.test(mcp)
   && /simulate that calldata from the paying address/.test(mcp));
+
+// The calldata contract is written where integrators read it: the OpenAPI parameters, README and llms.txt.
+const llms = read('llms.txt');
+check('docs: OpenAPI userMinOut is required for calldata (min_required) and exact emits none',
+  /name: 'userMinOut'[^\n]*\n\s*description: '[^\n]*required for calldata[^\n]*min_required/.test(oapi)
+  && /name: 'exact'[^\n]*\n\s*description: '[^\n]*emits no calldata/.test(oapi));
+check('docs: README and llms.txt say calldata needs userMinOut (min_required) and exact emits none',
+  [readme, llms].every((d) => /userMinOut/.test(d) && /min_required/.test(d) && /exact=1` never emits calldata/.test(d)));
 
 console.log(failed === 0 ? `✅ ${passed} passed, 0 failed` : `❌ ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

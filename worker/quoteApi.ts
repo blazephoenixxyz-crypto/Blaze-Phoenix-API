@@ -1111,7 +1111,7 @@ export function handleDiscovery(): Response {
       + 'and publishes the versioned contract registry. No key, no signup, open CORS. Amounts are '
       + 'integer base units (wei-style) as decimal strings.',
     endpoints: {
-      prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient for swap calldata)' },
+      prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient and userMinOut for swap calldata)' },
       prepareBatch: { method: 'POST', path: '/api/quote/prepare', note: `{ requests: [...] } → one JSON-RPC batch, max ${MAX_PREPARE_BATCH}` },
       decode: { method: 'POST', path: '/api/quote/decode', note: '{ request, result } → quote, Phoenix Check, calldata verified against the request (pure; simulate it from the payer before sending)' },
       deployments: { method: 'GET', path: '/api/deployments', note: 'versioned registry: Core/Hub/Solver/Quoter/Router per chain and version' },

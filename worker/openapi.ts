@@ -92,18 +92,18 @@ const QUOTE_SCHEMA = {
     },
     tx: {
       type: 'object',
-      description: 'present when `recipient` was prepared: unsigned; it clears the swap math (canExecute), not the token transfer, so simulate it as an eth_call to the Router from the paying address before sending (executeWith.note). On 2.x the bytes are the Quoter\'s own (previewAndEncode), verified field by field.',
+      description: 'present when `recipient` and a non-zero `userMinOut` were prepared and the route can execute (preview mode only: `exact=1` never emits calldata): unsigned; it clears the swap math (canExecute), not the token transfer, so simulate it as an eth_call to the Router from the paying address before sending (executeWith.note). On 2.x the bytes are the Quoter\'s own (previewAndEncode), verified field by field.',
       properties: {
         to: { type: 'string', description: 'the Router of this version (re-resolved from the registry, never from the request)' },
         data: { type: 'string' },
         value: { type: 'string', description: '"0", or amountIn for swapExactInNative (2.x native ETH input)' },
       },
     },
-    minOut: { type: 'string', description: 'minimum encoded in tx: netOut − slippage, never below the on-chain floor' },
+    minOut: { type: 'string', description: 'minimum encoded in tx: the greatest of your userMinOut, netOut − slippage and the on-chain floor' },
     entry: { type: 'string', enum: ['swapExactIn', 'swapExactInNative'] },
     encodedBy: { type: 'string', enum: ['quoter', 'site'] },
     approval: { type: 'object', description: 'ERC-20 input: approve the Router for tokenIn before sending tx' },
-    txError: { type: 'object', description: 'why no tx was emitted (not_executable, calldata_mismatch, wrap_required, deadline_passed, min_required — decode is pure, so a tx needs userMinOut set by the caller)' },
+    txError: { type: 'object', description: 'why no tx was emitted (not_executable, calldata_mismatch, wrap_required, deadline_passed, min_required — decode is pure and cannot authenticate your node, so a tx needs a userMinOut pinned by the caller; a recipient without one answers min_required)' },
     exact: {
       type: 'object',
       description: 'mode exact only: what the pool dry-run measures (`tested`) and what it does not (`notTested`)',
@@ -146,17 +146,17 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'recipient', in: 'query', required: false,
-    description: '0x-address — response then includes unsigned tx calldata (swap math only: simulate it from the payer before sending)',
+    description: '0x-address — with a non-zero userMinOut, the decoded response includes unsigned tx calldata (preview mode only; swap math only: simulate it from the payer before sending); without userMinOut it carries txError min_required instead',
     schema: { type: 'string' },
   },
   {
     name: 'slippageBps', in: 'query', required: false,
-    description: '0–5000 (default 50); minOut = netOut − slippage, never below the on-chain floor',
+    description: '0–5000 (default 50); the tx minOut is the greatest of userMinOut, netOut − slippage and the on-chain floor',
     schema: { type: 'integer', minimum: 0, maximum: 5000 },
   },
   {
     name: 'userMinOut', in: 'query', required: false,
-    description: 'explicit minimum output (base units) — tightens the on-chain floor; at most 2^256-1',
+    description: 'minimum output in tokenOut base units, from a price you trust; required for calldata (decode cannot authenticate your node\'s answer, so a recipient without it gets txError min_required); the tx minOut is never below it; at most 2^256-1',
     schema: { type: 'string', pattern: '^[0-9]{1,78}$' },
   },
   {
@@ -171,7 +171,7 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'exact', in: 'query', required: false,
-    description: 'exact=1 → previewPlanExact: every leg dry-run on its own venue in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes',
+    description: 'exact=1 → previewPlanExact: every leg dry-run on its own venue in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes. Exact mode emits no calldata: prepare a preview with recipient and userMinOut for a transaction',
     schema: { type: 'string', enum: ['1'] },
   },
 ] as const;
@@ -184,8 +184,8 @@ export const OPENAPI = {
     description:
       'On-chain DEX-aggregator integration for Base, Ethereum, Optimism, Arbitrum and Robinhood Chain. '
       + 'Quotes run on YOUR RPC: this API performs no RPC for integrators. prepare → run the returned '
-      + 'eth_call on your node → decode (pure) gives the quote, the Phoenix Check and, with `recipient`, '
-      + 'verified unsigned Router calldata. /api/deployments publishes the versioned contract registry. '
+      + 'eth_call on your node → decode (pure) gives the quote, the Phoenix Check and, with `recipient` and `userMinOut`, '
+      + 'verified unsigned Router calldata (preview mode). /api/deployments publishes the versioned contract registry. '
       + 'No API key, no signup, open CORS. In-process instead: npm i @blazephoenix/sdk viem, or the local '
       + 'MCP server (npx -y @blazephoenix/mcp). Playground: https://blazephoenix.xyz/?tab=api',
     contact: { email: 'contact@blazephoenix.xyz', url: 'https://blazephoenix.xyz/?tab=api' },
