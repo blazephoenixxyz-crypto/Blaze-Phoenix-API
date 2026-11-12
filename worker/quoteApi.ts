@@ -41,6 +41,7 @@ import { keyedRpcs } from './providerKeys';
 import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
   prepareQuote, decodeQuote, registryDocument, phoenixChecks, isUint256Str, RPC_REQUIRED_MESSAGE, TX_SCOPE, type Preview,
+  minOutFor, DEFAULT_SLIPPAGE_BPS,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
 import { SITE } from '../src/config/site';
@@ -770,9 +771,11 @@ async function execQuote(p: QuoteParams): Promise<{ status: number; body: Record
     // needs a WETH wrap first, which is the caller's move).
     let tx: { to: `0x${string}`; data: `0x${string}`; value: '0' } | undefined;
     if (p.recipient && !p.nativeIn && pv.canExecute) {
-      const minOut = p.slippageBps !== undefined
-        ? pv.netOut - (pv.netOut * BigInt(p.slippageBps)) / 10_000n
-        : pv.effectiveMinOut;
+      // Same rule as the decode: the quote net of slippageBps, never under the on-chain
+      // effectiveMinOut, raised to the caller's userMinOut — it can only raise it.
+      const floor = minOutFor(pv.netOut, p.slippageBps ?? DEFAULT_SLIPPAGE_BPS, pv.effectiveMinOut);
+      const userMinOut = p.userMinOut ?? 0n;
+      const minOut = userMinOut > floor ? userMinOut : floor;
       tx = {
         to: router,
         data: encodeFunctionData({

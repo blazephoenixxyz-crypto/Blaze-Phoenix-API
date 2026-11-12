@@ -316,7 +316,7 @@ export function parsePreparedRequest(raw: unknown): { ok: true; req: PreparedReq
   };
 }
 
-const minOutFor = (netOut: bigint, slippageBps: number, floor: bigint): bigint => {
+export const minOutFor = (netOut: bigint, slippageBps: number, floor: bigint): bigint => {
   const bySlip = netOut - (netOut * BigInt(slippageBps)) / 10_000n;
   return bySlip > floor ? bySlip : floor;
 };

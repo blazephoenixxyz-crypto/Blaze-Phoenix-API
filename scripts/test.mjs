@@ -74,10 +74,10 @@ function emit(file) {
 const load = (f) => import(pathToFileURL(emit(join(root, f))).href);
 
 try {
-  const { encodeFunctionResult } = await import('viem');
+  const { encodeFunctionResult, decodeFunctionData } = await import('viem');
   const { CHAINS } = await load('src/config/chains.ts');
   const { DEPLOYMENTS } = await load('src/config/deployments.ts');
-  const { QUOTER_ABI } = await load('src/abis/blaze.ts');
+  const { QUOTER_ABI, ROUTER_ABI } = await load('src/abis/blaze.ts');
   const { decodeQuote } = await load('worker/codec.ts');
   const { resolveTokenParam, parseQuoteParams, prepareFromParams, handleQuoteFirstParty, BZPX_COMING_SOON,
     handleManifest, handleDeployments, handleDiscovery, handleHealth } = await load('worker/quoteApi.ts');
@@ -273,6 +273,41 @@ try {
   const xTx = decodeQuote({ ...req1, fn: 'previewPlanExact', userMinOut: '2290000000', recipient: rcpt, slippageBps: 50, deadline: String(NOW + 120) },
     encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlanExact', result: [{ ...live, singleOut: live.totalOut }, live.totalOut] }), NOW);
   check('calldata: exact mode with a recipient and userMinOut emits no tx', xTx.ok && xTx.body.mode === 'exact' && xTx.body.tx === undefined);
+
+  // The first-party quote (the site's bot, our own RPC) emits swapExactIn calldata when given a
+  // recipient: same rule as the decode — max(userMinOut, netOut less slippageBps (default 50),
+  // never under effectiveMinOut). Its node answer is mocked here, then fetch is restored.
+  {
+    const USER = '0x00000000000000000000000000000000000000b0';
+    const FLOOR = honest.netOut - (honest.netOut * 50n) / BPS;
+    const fpAt = async (qs) => {
+      let rpcCalls = 0;
+      globalThis.fetch = async () => {
+        rpcCalls++;
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1,
+          result: encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlan', result: [honest, live, false] }) }), { status: 200 });
+      };
+      try {
+        const b = await (await handleQuoteFirstParty(new URL(`https://blazephoenix.xyz/api/quote?chain=base&in=${base.weth}&out=${base.usdc}&amountIn=${ONE}${qs}`))).json();
+        return { b, rpcCalls, min: b?.tx ? decodeFunctionData({ abi: ROUTER_ABI, data: b.tx.data }).args[2] : undefined };
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    };
+    check('first-party quote: the floor sits between effectiveMinOut and netOut (fixture sanity)',
+      honest.effectiveMinOut < FLOOR && FLOOR < honest.netOut && honest.canExecute);
+    const fp0 = await fpAt('');
+    check('first-party quote: no recipient -> quote from one RPC call, no tx', fp0.b.ok === true && fp0.rpcCalls === 1 && fp0.b.tx === undefined);
+    const fpR = `&recipient=${USER}`;
+    check('first-party quote: recipient, no userMinOut/slippageBps -> signs the 50 bps floor', (await fpAt(fpR)).min === FLOOR);
+    check('first-party quote: userMinOut=1 -> signs the floor, not 1', (await fpAt(`${fpR}&userMinOut=1`)).min === FLOOR);
+    check('first-party quote: userMinOut = floor - 1 -> signs the floor', (await fpAt(`${fpR}&userMinOut=${FLOOR - 1n}`)).min === FLOOR);
+    check('first-party quote: userMinOut = floor + 1 -> signs userMinOut (the caller\'s minimum is kept)',
+      (await fpAt(`${fpR}&userMinOut=${FLOOR + 1n}`)).min === FLOOR + 1n);
+    check('first-party quote: slippageBps=0 -> signs netOut', (await fpAt(`${fpR}&slippageBps=0`)).min === honest.netOut);
+    check('first-party quote: slippageBps=200 -> signs effectiveMinOut (never under it)',
+      (await fpAt(`${fpR}&slippageBps=200`)).min === honest.effectiveMinOut);
+  }
 
   // 2.x, with the registry holding a Base 2.0.0 set for these checks: the fee and the buffer
   // round up; the fee is charged once, or once per hop on a multi-hop route that holds no
