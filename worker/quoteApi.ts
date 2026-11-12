@@ -487,7 +487,7 @@ async function resolveUnknownSymbols(searchParams: URLSearchParams): Promise<{
 // ── Integrator surface: zero RPC ─────────────────────────────────────────────
 
 const INTEGRATE = {
-  sdk: 'npm i @blazephoenix/sdk viem — quotes, verified calldata and execution on your RPC, in-process',
+  sdk: 'npm i @blazephoenix/sdk viem — quotes, calldata verified against the request, simulation from the payer and execution on your RPC, in-process',
   mcp: 'npx -y @blazephoenix/mcp with BLAZEPHOENIX_RPC_<CHAIN>=… — agent tools on your machine and your RPC',
   prepare: 'GET /api/quote/prepare (same params) → the eth_call to run on your node',
   decode: 'POST /api/quote/decode { request, result } → quote + Phoenix Check + calldata (pure, no RPC)',
@@ -1109,7 +1109,7 @@ export function handleDiscovery(): Response {
     endpoints: {
       prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient for swap calldata)' },
       prepareBatch: { method: 'POST', path: '/api/quote/prepare', note: `{ requests: [...] } → one JSON-RPC batch, max ${MAX_PREPARE_BATCH}` },
-      decode: { method: 'POST', path: '/api/quote/decode', note: '{ request, result } → quote, Phoenix Check, verified calldata (pure)' },
+      decode: { method: 'POST', path: '/api/quote/decode', note: '{ request, result } → quote, Phoenix Check, calldata verified against the request (pure; simulate it from the payer before sending)' },
       deployments: { method: 'GET', path: '/api/deployments', note: 'versioned registry: Core/Hub/Solver/Quoter/Router per chain and version' },
       abi: { method: 'GET', path: '/api/abi?contract=quoter', note: 'ABIs generated from the Solidity sources' },
       quote: { method: 'GET', path: '/api/quote', note: 'retired relay — answers 400 rpc_required with the prepared call inline' },

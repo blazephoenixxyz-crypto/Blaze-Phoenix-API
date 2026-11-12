@@ -233,7 +233,7 @@ export const OPENAPI = {
     '/api/quote/decode': {
       post: {
         operationId: 'decodeQuote',
-        summary: 'Your node\'s eth_call answer → quote, Phoenix Check, verified calldata (pure)',
+        summary: 'Your node\'s eth_call answer → quote, Phoenix Check, calldata verified against the request (pure; simulate it from the payer before sending)',
         requestBody: {
           required: true,
           content: { 'application/json': { schema: {

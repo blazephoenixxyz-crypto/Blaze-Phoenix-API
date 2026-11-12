@@ -228,6 +228,10 @@ try {
 const oapi = read('worker/openapi.ts');
 check('no surface calls the calldata ready-to-send / signable / ready for sendTransaction',
   ![api, codec, mcp, oapi].some((s) => /ready-to-send|ready-to-broadcast|ready-to-sign|signable calldata|ready for sendTransaction/.test(s)));
+// "verified calldata" alone reads as verified-to-execute; the verification is against the request.
+const readme = read('README.md');
+check('no surface says bare "verified calldata" (it is verified against the request, and swap math only)',
+  ![api, codec, mcp, oapi, readme].some((s) => /verified calldata/.test(s)));
 check('one TX_SCOPE text names the Router eth_call from the payer and the token cases',
   /export const TX_SCOPE = [^;]*eth_call to the Router from the paying address[^;]*tax, cap a wallet or exempt/.test(codec));
 check('decode preview carries TX_SCOPE beside every tx',
