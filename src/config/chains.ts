@@ -40,8 +40,6 @@ export interface ChainConfig {
   weth: `0x${string}`;
   /** Canonical bridge USDC on this chain (the deep, universal quote asset). */
   usdc: `0x${string}`;
-  /** Project token (BZPX). Only set where the token is live. */
-  bzpx?: `0x${string}`;
   /** Ordered RPC list — first that responds wins (fallback transport). */
   rpcs: string[];
   /** Protocol version the contracts below speak ("1.0.0" | "2.0.0"). */
@@ -143,7 +141,7 @@ export const CHAINS: Record<SupportedChainId, ChainConfig> = {
     ...dex(1, ZERO),
   },
 
-  // ── Base L2 (BZPX token + staking live here) ─────────────────────────────
+  // ── Base L2 ──────────────────────────────────────────────────────────────
   // Public pool (Alchemy + base endpoints) leads small trades; the keyed dRPC
   // closes the list and is promoted to FIRST for trades ≥ 0.2 ETH (rpcsForTrade).
   8453: {
@@ -155,7 +153,6 @@ export const CHAINS: Record<SupportedChainId, ChainConfig> = {
     nativeSymbol: 'ETH',
     weth: '0x4200000000000000000000000000000000000006',
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-    bzpx: '0x23113e72165a034265Ab8Bf2277CCB7a85Cb7483',
     rpcs: [
       'https://mainnet.base.org',
       'https://base-rpc.publicnode.com',
@@ -165,9 +162,7 @@ export const CHAINS: Record<SupportedChainId, ChainConfig> = {
       ...alchemy('base-mainnet'),
       DRPC[8453],
     ],
-    // BlazePhoenixStaking v3.0.0 — verified on Base (180M BZPX / 7-year
-    // emission, isSolvent() = true at deploy). Flips isStakingLive → true.
-    ...dex(8453, '0x3f60C7aa0c36a78D200405feBE143d2Cf3fA0c77'),
+    ...dex(8453, ZERO),
   },
 
   // ── Optimism L2 ──────────────────────────────────────────────────────────

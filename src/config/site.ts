@@ -10,11 +10,10 @@ export const SITE = {
   // forwards contact@blazephoenix.xyz → the Proton inbox (set up in the CF
   // dashboard: Email → Email Routing). Change here only if the alias changes.
   contactEmail: 'contact@blazephoenix.xyz',
+  // BZPX: coming soon. The token address is not published yet, so none is carried here.
   token: {
     symbol: 'BZPX',
-    chain: 'Base',
-    address: '0x23113e72165a034265Ab8Bf2277CCB7a85Cb7483',
-    basescan: 'https://basescan.org/token/0x23113e72165a034265Ab8Bf2277CCB7a85Cb7483',
+    status: 'coming soon',
     totalSupply: '1,000,000,000',
   },
   // Protocol deploy manifest (public, on-chain-verifiable) — surfaced in the

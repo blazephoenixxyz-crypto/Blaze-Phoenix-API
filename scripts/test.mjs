@@ -79,7 +79,11 @@ try {
   const { DEPLOYMENTS } = await load('src/config/deployments.ts');
   const { QUOTER_ABI } = await load('src/abis/blaze.ts');
   const { decodeQuote } = await load('worker/codec.ts');
-  const { resolveTokenParam, parseQuoteParams, prepareFromParams, handleQuoteFirstParty } = await load('worker/quoteApi.ts');
+  const { resolveTokenParam, parseQuoteParams, prepareFromParams, handleQuoteFirstParty, BZPX_COMING_SOON,
+    handleManifest, handleDeployments, handleDiscovery, handleHealth } = await load('worker/quoteApi.ts');
+  const { handleBadge, handleSolvencyReport, SOLVENCY_COMING_SOON } = await load('worker/solvency.ts');
+  const { handleOpenapi } = await load('worker/openapi.ts');
+  const { handleMcp } = await load('worker/mcp.ts');
 
   // Symbols resolve only to the token they name. `chain.usdc` holds each chain's one dollar
   // asset: USDG on Robinhood Chain, USDC elsewhere. The other symbol does not resolve to it.
@@ -95,6 +99,61 @@ try {
   const rhPrep = prepareFromParams(new URLSearchParams('chain=robinhood&in=USDC&out=WETH&amountIn=1000000'));
   check('symbols: prepare (REST and MCP) points to USDG on Robinhood Chain and lists USDC with that caveat',
     !rhPrep.ok && /USDG/.test(rhPrep.message) && !/USDC and BZPX are built in/.test(rhPrep.message));
+  // BZPX: coming soon. No chain resolves the ticker, the refusal says so, and no response
+  // carries a BZPX or staking address. Mutants: put `bzpx: '0x…'` and `case 'BZPX'` back in
+  // chains.ts/quoteApi.ts (resolve + refusal checks go red); put the staking address back in
+  // dex(…) or SITE.token (the response scan goes red); read or name a contract in the badge
+  // or the /cli banner (same). The scan needs no address literal: every 0x address a
+  // response carries must be one this repo publishes on purpose (registry, weth, dollar
+  // asset, fee split, admin, zero, the native sentinel).
+  const bzpxSyms = ['BZPX', 'bzpx', ' Bzpx '];
+  check('bzpx: the ticker resolves on no chain',
+    Object.keys(CHAINS).every((id) => bzpxSyms.every((sym) => resolveTokenParam(sym, Number(id)) === undefined)));
+  check('bzpx: no chain config carries a bzpx field or a non-zero staking address',
+    Object.values(CHAINS).every((c) => !('bzpx' in c) && /^0x0{40}$/.test(c.contracts.staking)));
+  const allChains = Object.keys(CHAINS);
+  const bzIns = allChains.map((id) => parseQuoteParams(new URLSearchParams(`chain=${id}&in=BZPX&out=WETH&amountIn=1000`)));
+  const bzOuts = allChains.map((id) => parseQuoteParams(new URLSearchParams(`chain=${id}&in=WETH&out=bzpx&amountIn=1000`)));
+  const bzPrep = prepareFromParams(new URLSearchParams(`chain=${allChains[0]}&in=BZPX&out=WETH&amountIn=1000`));
+  check('bzpx: in=BZPX -> bad_token_in with the coming-soon refusal, on every chain',
+    bzIns.length >= 5 && bzIns.every((r) => !r.ok && r.code === 'bad_token_in' && r.message.includes(BZPX_COMING_SOON)));
+  check('bzpx: out=BZPX -> bad_token_out with the coming-soon refusal, on every chain',
+    bzOuts.every((r) => !r.ok && r.code === 'bad_token_out' && r.message.includes(BZPX_COMING_SOON)));
+  check('bzpx: prepare (REST and MCP) carries the refusal and no longer lists BZPX as built in',
+    !bzPrep.ok && bzPrep.message.includes(BZPX_COMING_SOON) && !/and BZPX are built in/.test(bzPrep.message));
+  const badgeRes = await handleBadge();
+  const badge = await badgeRes.clone().json();
+  check('solvency: /api/badge answers coming_soon fail-closed (no verdict, no read time)',
+    badgeRes.status === 200 && badge.status === 'coming_soon' && badge.message === SOLVENCY_COMING_SOON
+    && badge.color === 'lightgrey' && badge.readAtMs === null && !/isSolvent|true|false/.test(badge.message));
+  const solvRes = await handleSolvencyReport();
+  const solvHtml = await solvRes.clone().text();
+  check('solvency: /solvency says proof-of-solvency is coming soon', solvRes.status === 200 && solvHtml.includes(SOLVENCY_COMING_SOON));
+  const noNet = /\b(base|basescan|ethereum|optimism|arbitrum|robinhood|8453)\b/i;
+  check('solvency: badge and page name no contract and no network',
+    [JSON.stringify(badge), solvHtml].every((t) => !/0x[0-9a-fA-F]{40}/.test(t) && !noNet.test(t.replace('blazephoenix.xyz', ''))));
+  const mcpList = await handleMcp(new Request('https://x/mcp', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }));
+  const { default: worker } = await load('worker/index.ts');
+  const cliRes = await worker.fetch(new Request('https://blazephoenix.xyz/cli'), {}, { waitUntil() {} });
+  const bodies = [handleManifest(), handleDeployments(), handleDiscovery(), handleHealth(), handleOpenapi(),
+    badgeRes, solvRes, mcpList, cliRes, bzPrep.message].map((r) => (typeof r === 'string' ? r : r.text()));
+  const served = (await Promise.all(bodies)).join('\n').toLowerCase();
+  const { SITE } = await load('src/config/site.ts');
+  const published = new Set([
+    '0x' + '0'.repeat(40), '0x' + 'e'.repeat(40), SITE.protocol.admin, ...SITE.protocol.feeSplit.map((f) => f.address),
+    ...Object.values(CHAINS).flatMap((c) => [c.weth, c.usdc]),
+    ...DEPLOYMENTS.versions.flatMap((d) => Object.values(d.chains).flatMap((e) => Object.values(e))),
+  ].filter((a) => typeof a === 'string').map((a) => a.toLowerCase()));
+  const strays = [...new Set(served.match(/0x[0-9a-f]{40}(?![0-9a-f])/g) ?? [])].filter((a) => !published.has(a));
+  check(`bzpx: every address a response carries is a published one, so none is a BZPX or staking address (${strays.join(', ') || 'none stray'})`,
+    served.length > 1000 && cliRes.status === 200 && strays.length === 0
+    && !/"bzpx"\s*:\s*"0x/.test(served) && !/"token"\s*:\s*\{[^}]*"address"/.test(served));
+  check('solvency: no served text calls the badge or the solvency report live',
+    !/live isSolvent|live proof-of-solvency|live staking|solvency-live|solvency on your own rpc/.test(served)
+    && /proof-of-solvency: coming soon \(html page/.test(served));
+  check('bzpx: no chain config or SITE.token carries a bzpx field or a token address',
+    !/bzpx\??:\s*['"`]?0x/i.test(read('src/config/chains.ts')) && !('address' in SITE.token) && !('chain' in SITE.token));
   // The first-party quote looks unknown tickers up by name. USDC on Robinhood Chain is answered
   // on the spot: nothing is fetched, neither a symbol lookup nor a read.
   const realFetch = globalThis.fetch;

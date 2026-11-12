@@ -131,12 +131,12 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'in', in: 'query', required: true,
-    description: 'input token: 0x-address or ETH/WETH/USDC/BZPX (anything else by address — the API never guesses a token)',
+    description: 'input token: 0x-address or ETH/WETH/USDC (BZPX: coming soon; anything else by address — the API never guesses a token)',
     schema: { type: 'string' },
   },
   {
     name: 'out', in: 'query', required: true,
-    description: 'output token: 0x-address or ETH/WETH/USDC/BZPX',
+    description: 'output token: 0x-address or ETH/WETH/USDC (BZPX: coming soon)',
     schema: { type: 'string' },
   },
   {
@@ -322,7 +322,7 @@ export const OPENAPI = {
     '/api/badge': {
       get: {
         operationId: 'getBadge',
-        summary: 'shields.io endpoint JSON: live staking isSolvent() badge — embed with https://img.shields.io/endpoint?url=…/api/badge',
+        summary: 'shields.io endpoint JSON for the staking badge. Proof-of-solvency: coming soon — the badge answers status coming_soon and reads no contract',
         responses: { '200': { description: 'badge (schemaVersion 1)', content: { 'application/json': {} } } },
       },
     },
@@ -332,7 +332,7 @@ export const OPENAPI = {
         summary: 'Re-execute a proof-carrying fact from /facts.json live on-chain (zero-argument reads only) and return the value with its block height; without ?fact, lists the verifiable fact ids',
         parameters: [{
           name: 'fact', in: 'query', required: false,
-          description: 'fact id from /facts.json (e.g. leg-floor, solvency-live)',
+          description: 'fact id from /facts.json (e.g. leg-floor)',
           schema: { type: 'string' },
         }],
         responses: {

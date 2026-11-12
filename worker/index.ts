@@ -123,8 +123,7 @@ export default {
         ' On-chain DEX aggregator · Base | Ethereum | Optimism | Arbitrum | Robinhood Chain',
         ' compute, don\'t trust — the quote IS the execution logic.',
         '',
-        ' [Solvency]  cast call 0x3f60C7aa0c36a78D200405feBE143d2Cf3fA0c77 \\',
-        '               "isSolvent()(bool)" --rpc-url https://mainnet.base.org',
+        ' [Solvency]  proof-of-solvency: coming soon',
         ' [Quote]     curl -s "https://blazephoenix.xyz/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000"',
         '             → run the returned eth_call on YOUR node (we perform no RPC for integrators)',
         ' [SDK]       npm i @blazephoenix/sdk viem   ·   quotes in-process, on your RPC',
@@ -247,9 +246,9 @@ export default {
       }
     }
 
-    // Live proof-of-solvency report — semantic HTML generated from the chain.
+    // Proof-of-solvency: coming soon — a static page, no chain read.
     // Own branch (it is a PAGE, not a CORS/JSON API); errors fall to a plain
-    // 503 inside the handler and can never affect static assets.
+    // 503 and can never affect static assets.
     if (path === '/solvency') {
       try {
         if (request.method !== 'GET') {

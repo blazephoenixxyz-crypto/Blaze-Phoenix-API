@@ -40,13 +40,13 @@ export const MCP_CORS_HEADERS: Record<string, string> = {
 };
 
 const LOCAL_SERVER =
-  'For one-step quotes, swaps and solvency on your own RPC, run the local server: '
+  'For one-step quotes and swaps on your own RPC, run the local server: '
   + 'claude mcp add blazephoenix -e BLAZEPHOENIX_RPC_BASE=<your node> -- npx -y @blazephoenix/mcp';
 
 const QUOTE_PARAMS = {
   chain: { type: 'string', description: 'base | eth | optimism | arbitrum | robinhood (or a chain id)' },
-  in: { type: 'string', description: 'input token — 0x address, or ETH / WETH / USDC / BZPX' },
-  out: { type: 'string', description: 'output token — 0x address, or ETH / WETH / USDC / BZPX' },
+  in: { type: 'string', description: 'input token — 0x address, or ETH / WETH / USDC (BZPX: coming soon, pass a token address)' },
+  out: { type: 'string', description: 'output token — 0x address, or ETH / WETH / USDC (BZPX: coming soon, pass a token address)' },
   amountIn: { type: 'string', description: 'input amount in base units (wei-style integer string)' },
   recipient: { type: 'string', description: 'optional 0x address; with it, decode_quote returns unsigned calldata that clears the swap math; simulate it as an eth_call to the Router from the payer before sending' },
   slippageBps: { type: 'integer', description: '0–5000 (default 50); never below the on-chain floor' },
