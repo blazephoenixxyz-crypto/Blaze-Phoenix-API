@@ -12,7 +12,9 @@ of modules it imports.
 The quote path performs **no RPC on our side**. `GET /api/quote/prepare` returns the
 exact `eth_call` to run on *your* node, and `POST /api/quote/decode` is a pure
 function that turns your node's answer into the quote, the Phoenix Check verdict
-and verified calldata. The SDK and the local MCP server do both steps in-process.
+and calldata verified against the request (it clears the swap math, not the token transfer:
+simulate it from the paying address before sending). The SDK and the local MCP server do both
+steps in-process.
 
 The legacy relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) are retired:
 they answer `400 rpc_required` with the prepared call inline.
