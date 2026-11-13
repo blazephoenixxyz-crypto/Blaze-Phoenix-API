@@ -2,9 +2,9 @@
 
 > Source of the BlazePhoenix HTTP API (`https://blazephoenix.xyz/api`) and the remote MCP endpoint (`https://blazephoenix.xyz/mcp`), a Cloudflare Worker published so anyone can read what they integrate with. BlazePhoenix is the on-chain DEX aggregator on Base, Ethereum, Optimism, Arbitrum and Robinhood Chain.
 
-The API is free and keyless: no API key, no signup, open CORS. Quotes run on your RPC node, not ours. `GET /api/quote/prepare` returns the exact `eth_call` to run on your node; `POST /api/quote/decode` is a pure function that turns your node's answer into the quote, the Phoenix Check verdict and, with a `recipient`, verified unsigned Router calldata. The retired relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) answer `400 rpc_required` with the prepared call inline.
+The API is free and keyless: no API key, no signup, open CORS. Quotes run on your RPC node, not ours. `GET /api/quote/prepare` returns the exact `eth_call` to run on your node; `POST /api/quote/decode` is a pure function that turns your node's answer into the quote, the Phoenix Check verdict and, with a `recipient` and a non-zero `userMinOut`, verified unsigned Router calldata (without `userMinOut`, `txError.min_required`; `exact=1` never emits calldata; the calldata minimum is the greatest of `userMinOut`, the quote net of `slippageBps` and the on-chain floor). The retired relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) answer `400 rpc_required` with the prepared call inline.
 
-Limits: `POST /api/quote/prepare` takes up to 32 requests (returned as one JSON-RPC batch for your node), and `POST /api/quote/decode` up to 32 items. The other read endpoints (`/api/stats`, `/api/tape`, `/api/badge`, `/api/verify`, `/solvency`) read the chain from our side and need no node from you.
+Limits: `POST /api/quote/prepare` takes up to 32 requests (returned as one JSON-RPC batch for your node), and `POST /api/quote/decode` up to 32 items. The other read endpoints (`/api/stats`, `/api/tape`, `/api/verify`) read the chain from our side and need no node from you. `/api/badge` and `/solvency` read nothing: proof-of-solvency: coming soon.
 
 Quote flow:
 

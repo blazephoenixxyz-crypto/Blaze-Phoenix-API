@@ -24,6 +24,7 @@ import {
   CORS_HEADERS,
 } from './quoteApi';
 import { handleOpenapi } from './openapi';
+import { handleVersion } from './version';
 import { handleSolvencyReport, handleBadge } from './solvency';
 import { handleMcp, MCP_CORS_HEADERS } from './mcp';
 import { setProviderKeys } from './providerKeys';
@@ -45,6 +46,8 @@ interface Env {
   // Deploy Hook URL for the scheduled rebuild (see scheduled() below).
   // Set as a secret, never in wrangler.jsonc: whoever holds it can queue builds.
   DEPLOY_HOOK_URL?: string;
+  // Source commit of this deploy (wrangler deploy --var COMMIT_SHA:$(git rev-parse HEAD)); /api/version.
+  COMMIT_SHA?: string;
   // Provider keys for the Worker's own reads (worker/providerKeys.ts). Secrets only.
   ALCHEMY_KEYS?: string;
   DRPC_KEY?: string;
@@ -123,8 +126,7 @@ export default {
         ' On-chain DEX aggregator · Base | Ethereum | Optimism | Arbitrum | Robinhood Chain',
         ' compute, don\'t trust — the quote IS the execution logic.',
         '',
-        ' [Solvency]  cast call 0x3f60C7aa0c36a78D200405feBE143d2Cf3fA0c77 \\',
-        '               "isSolvent()(bool)" --rpc-url https://mainnet.base.org',
+        ' [Solvency]  proof-of-solvency: coming soon',
         ' [Quote]     curl -s "https://blazephoenix.xyz/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000"',
         '             → run the returned eth_call on YOUR node (we perform no RPC for integrators)',
         ' [SDK]       npm i @blazephoenix/sdk viem   ·   quotes in-process, on your RPC',
@@ -196,7 +198,7 @@ export default {
     // pure; /api/quote and /api/quote/batch answer rpc_required with the
     // prepared call). stats/tape/badge/verify are the site's own edge-cached
     // dashboards — one read per cache window, whatever the caller count.
-    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/stats', '/api/badge', '/api/tape', '/api/verify'];
+    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/version', '/api/stats', '/api/badge', '/api/tape', '/api/verify'];
     if (API_PATHS.includes(path)) {
       try {
         // The actor verdict goes out in a header on ALL API responses, through a
@@ -235,6 +237,7 @@ export default {
         if (path === '/api/openapi.json') return mark(handleOpenapi());
         if (path === '/api') return mark(handleDiscovery());
         if (path === '/api/health') return mark(handleHealth());
+        if (path === '/api/version') return mark(handleVersion(env));
         if (path === '/api/stats') return mark(await handleStats());
         if (path === '/api/badge') return mark(await handleBadge());
         if (path === '/api/tape') return mark(await handleTape(url));
@@ -247,9 +250,9 @@ export default {
       }
     }
 
-    // Live proof-of-solvency report — semantic HTML generated from the chain.
+    // Proof-of-solvency: coming soon — a static page, no chain read.
     // Own branch (it is a PAGE, not a CORS/JSON API); errors fall to a plain
-    // 503 inside the handler and can never affect static assets.
+    // 503 and can never affect static assets.
     if (path === '/solvency') {
       try {
         if (request.method !== 'GET') {

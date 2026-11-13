@@ -41,6 +41,7 @@ import { keyedRpcs } from './providerKeys';
 import { isV2, DEPLOYMENTS } from '../src/config/deployments';
 import {
   prepareQuote, decodeQuote, registryDocument, phoenixChecks, isUint256Str, RPC_REQUIRED_MESSAGE, TX_SCOPE, type Preview,
+  minOutFor, DEFAULT_SLIPPAGE_BPS,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
 import { SITE } from '../src/config/site';
@@ -98,7 +99,8 @@ const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const dollarSymbol = (chainId: SupportedChainId): 'USDC' | 'USDG' => (chainId === 4663 ? 'USDG' : 'USDC');
 
 /** Resolve a token param: 0x-address, or the universal symbols every chain
- *  config carries (ETH → native sentinel, WETH, the dollar asset, BZPX where live).
+ *  config carries (ETH → native sentinel, WETH, the dollar asset). BZPX is coming soon
+ *  and resolves nowhere: its address is not published yet.
  *  A symbol resolves only to the token it names: the dollar asset answers to its own
  *  symbol (`dollarSymbol`), so USDC does not resolve on Robinhood Chain, nor USDG elsewhere. */
 export function resolveTokenParam(
@@ -117,15 +119,18 @@ export function resolveTokenParam(
     case 'WETH': return chain.weth;
     case 'USDC':
     case 'USDG': return sym === dollarSymbol(chainId) ? chain.usdc : undefined;
-    case 'BZPX': return chain.bzpx; // undefined off Base → clean 400 below
     default: return undefined;
   }
 }
+
+/** BZPX is not resolved by ticker anywhere until its address is published. */
+export const BZPX_COMING_SOON = 'BZPX: coming soon — the token address is not published yet; pass a token address';
 
 /** Why a token param did not resolve. USDC and USDG name two different tokens and each
  *  chain carries one of them, so the other one is answered with the symbol to use. */
 function unresolvedToken(raw: string | null, chainId: SupportedChainId): string {
   const sym = (raw ?? '').trim().toUpperCase();
+  if (sym === 'BZPX') return BZPX_COMING_SOON;
   const own = dollarSymbol(chainId);
   if ((sym === 'USDC' || sym === 'USDG') && sym !== own) {
     return `${sym} is not built in on ${CHAINS[chainId].name}, whose dollar asset is ${own} — pass ${own} or the 0x token address`;
@@ -504,7 +509,7 @@ export function prepareFromParams(searchParams: URLSearchParams, nowSec = Math.f
     // (an outbound fetch per request). The integrator surface no longer
     // fetches anything, so it says what to pass instead.
     if (parsed.code === 'bad_token_in' || parsed.code === 'bad_token_out') {
-      return { ...parsed, message: `${parsed.message} (ETH, WETH, USDC (USDG on Robinhood Chain) and BZPX are built in; everything else by address)` };
+      return { ...parsed, message: `${parsed.message} (ETH, WETH and USDC (USDG on Robinhood Chain) are built in; everything else by address)` };
     }
     return parsed;
   }
@@ -766,9 +771,11 @@ async function execQuote(p: QuoteParams): Promise<{ status: number; body: Record
     // needs a WETH wrap first, which is the caller's move).
     let tx: { to: `0x${string}`; data: `0x${string}`; value: '0' } | undefined;
     if (p.recipient && !p.nativeIn && pv.canExecute) {
-      const minOut = p.slippageBps !== undefined
-        ? pv.netOut - (pv.netOut * BigInt(p.slippageBps)) / 10_000n
-        : pv.effectiveMinOut;
+      // Same rule as the decode: the quote net of slippageBps, never under the on-chain
+      // effectiveMinOut, raised to the caller's userMinOut — it can only raise it.
+      const floor = minOutFor(pv.netOut, p.slippageBps ?? DEFAULT_SLIPPAGE_BPS, pv.effectiveMinOut);
+      const userMinOut = p.userMinOut ?? 0n;
+      const minOut = userMinOut > floor ? userMinOut : floor;
       tx = {
         to: router,
         data: encodeFunctionData({
@@ -1107,7 +1114,7 @@ export function handleDiscovery(): Response {
       + 'and publishes the versioned contract registry. No key, no signup, open CORS. Amounts are '
       + 'integer base units (wei-style) as decimal strings.',
     endpoints: {
-      prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient for swap calldata)' },
+      prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient and userMinOut for swap calldata)' },
       prepareBatch: { method: 'POST', path: '/api/quote/prepare', note: `{ requests: [...] } → one JSON-RPC batch, max ${MAX_PREPARE_BATCH}` },
       decode: { method: 'POST', path: '/api/quote/decode', note: '{ request, result } → quote, Phoenix Check, calldata verified against the request (pure; simulate it from the payer before sending)' },
       deployments: { method: 'GET', path: '/api/deployments', note: 'versioned registry: Core/Hub/Solver/Quoter/Router per chain and version' },
@@ -1118,8 +1125,8 @@ export function handleDiscovery(): Response {
       openapi: { method: 'GET', path: '/api/openapi.json' },
       health: { method: 'GET', path: '/api/health' },
       stats: { method: 'GET', path: '/api/stats', note: 'live fills per chain from on-chain Swap events (reproducible)' },
-      badge: { method: 'GET', path: '/api/badge', note: 'shields.io endpoint JSON — live isSolvent() badge for any README' },
-      solvency: { method: 'GET', path: '/solvency', note: 'live proof-of-solvency report (HTML, full solvency() struct from chain)' },
+      badge: { method: 'GET', path: '/api/badge', note: 'shields.io endpoint JSON for the staking badge. Proof-of-solvency: coming soon (status coming_soon, no contract read)' },
+      solvency: { method: 'GET', path: '/solvency', note: 'Proof-of-solvency: coming soon (HTML page, no contract read)' },
       llms: { method: 'GET', path: '/llms.txt', note: 'agent-readable integration guide' },
     },
     docs: 'https://blazephoenix.xyz/?tab=api',
@@ -1228,7 +1235,6 @@ export function handleManifest(): Response {
       contracts: c.contracts,
       weth: c.weth,
       usdc: c.usdc,
-      ...(c.bzpx ? { bzpx: c.bzpx } : {}),
     };
   });
   return json(200, {

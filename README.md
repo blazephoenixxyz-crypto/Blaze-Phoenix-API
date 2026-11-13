@@ -13,7 +13,11 @@ The quote path performs **no RPC on our side**. `GET /api/quote/prepare` returns
 exact `eth_call` to run on *your* node, and `POST /api/quote/decode` is a pure
 function that turns your node's answer into the quote, the Phoenix Check verdict
 and calldata verified against the request (it clears the swap math, not the token transfer:
-simulate it from the paying address before sending). The SDK and the local MCP server do both
+simulate it from the paying address before sending). Calldata needs `recipient` and a
+non-zero `userMinOut` on `prepare`, a minimum you pin from a price you trust, because decode
+cannot authenticate your node's answer; without it `decode` answers `txError.min_required`.
+The calldata minimum is the greatest of `userMinOut`, the quote net of `slippageBps` and the
+on-chain floor, and `exact=1` never emits calldata. The SDK and the local MCP server do both
 steps in-process.
 
 The legacy relay endpoints (`GET /api/quote`, `POST /api/quote/batch`) are retired:
@@ -34,8 +38,9 @@ such as `2.0.0`); without it, each chain uses its newest deployed version.
   on your own node and send the answer to `decode`. The SDK and the local MCP server read
   their node URL from your configuration (`BLAZEPHOENIX_RPC_URL` or
   `BLAZEPHOENIX_RPC_<CHAIN>`).
-- **Nothing to bring for the other reads.** `/api/stats`, `/api/tape`, `/api/badge`,
-  `/api/verify` and `/solvency` read the chain from our side.
+- **Nothing to bring for the other reads.** `/api/stats`, `/api/tape` and `/api/verify`
+  read the chain from our side. `/api/badge` and `/solvency` read nothing:
+  proof-of-solvency: coming soon.
 - **Batch limits.** `POST /api/quote/prepare` takes up to 32 requests, and
   `POST /api/quote/decode` up to 32 items.
 - **Metering.** Only requests that Cloudflare's bot score marks as suspect are metered
@@ -58,9 +63,9 @@ For agents, [`llms.txt`](./llms.txt) describes this API in the [llmstxt.org](htt
 | GET | `/api/health` | Service health and per-chain flags |
 | GET | `/api/stats` | Fills and unique traders from on-chain `Swap` events |
 | GET | `/api/tape` | Recent swaps |
-| GET | `/api/badge` | shields.io endpoint for the staking `isSolvent()` badge |
+| GET | `/api/badge` | shields.io endpoint for the staking badge (proof-of-solvency: coming soon) |
 | GET | `/api/verify` | Re-executes a proof-carrying fact live on-chain |
-| GET | `/solvency` | Staking solvency view |
+| GET | `/solvency` | Staking page (proof-of-solvency: coming soon) |
 | POST | `/mcp` | Remote MCP endpoint (streamable HTTP, stateless) |
 | GET | `/api/quote`, POST `/api/quote/batch` | Retired; answer `400 rpc_required` |
 

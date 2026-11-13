@@ -40,17 +40,17 @@ export const MCP_CORS_HEADERS: Record<string, string> = {
 };
 
 const LOCAL_SERVER =
-  'For one-step quotes, swaps and solvency on your own RPC, run the local server: '
+  'For one-step quotes and swaps on your own RPC, run the local server: '
   + 'claude mcp add blazephoenix -e BLAZEPHOENIX_RPC_BASE=<your node> -- npx -y @blazephoenix/mcp';
 
 const QUOTE_PARAMS = {
   chain: { type: 'string', description: 'base | eth | optimism | arbitrum | robinhood (or a chain id)' },
-  in: { type: 'string', description: 'input token — 0x address, or ETH / WETH / USDC / BZPX' },
-  out: { type: 'string', description: 'output token — 0x address, or ETH / WETH / USDC / BZPX' },
+  in: { type: 'string', description: 'input token — 0x address, or ETH / WETH / USDC (BZPX: coming soon, pass a token address)' },
+  out: { type: 'string', description: 'output token — 0x address, or ETH / WETH / USDC (BZPX: coming soon, pass a token address)' },
   amountIn: { type: 'string', description: 'input amount in base units (wei-style integer string)' },
   recipient: { type: 'string', description: 'optional 0x address; with it, decode_quote returns unsigned calldata that clears the swap math; simulate it as an eth_call to the Router from the payer before sending' },
   slippageBps: { type: 'integer', description: '0–5000 (default 50); never below the on-chain floor' },
-  userMinOut: { type: 'string', description: 'optional explicit minimum output, base units' },
+  userMinOut: { type: 'string', description: 'minimum output, base units, from a price you trust; required for calldata (without it decode_quote returns a txError, min_required)' },
   deadlineSec: { type: 'integer', description: 'deadline horizon in seconds, 10–3600 (default 120)' },
   exact: { type: 'boolean', description: 'true → previewPlanExact: every leg dry-run on its own venue in this block (no calldata). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes; simulate the swap from the holder to test that' },
   version: { type: 'string', description: 'protocol version: latest (default) | 1 | 2 | 2.0.0' },
@@ -85,9 +85,11 @@ export const MCP_TOOLS = [
     name: 'decode_quote',
     title: 'Decode a quote result',
     description:
-      'Decode the eth_call result YOUR node returned for a prepare_quote call: net output after the 0.28% fee, the minimum the '
-      + 'Router enforces on-chain, price impact, the Phoenix Check verdict (ok / caution / danger / blocked — fails closed) '
-      + 'and, with a recipient, unsigned calldata verified against the request. It clears the swap math, not the token transfer: '
+      'Decode the eth_call result YOUR node returned for a prepare_quote call: net output after the 0.28% fee, price impact, '
+      + 'the Phoenix Check verdict (ok / caution / danger / blocked — fails closed) and, in preview mode, the on-chain floor the '
+      + 'Quoter reports for the route (ironFloor, effectiveMinOut). With a recipient and a userMinOut, it also returns unsigned '
+      + 'calldata verified against the request, with a minimum output of the greater of your userMinOut and this quote net of '
+      + 'slippageBps (a recipient without userMinOut returns a txError instead). It clears the swap math, not the token transfer: '
       + 'before sending, simulate it as an eth_call to the Router from the paying address (a token can tax, cap a wallet or exempt addresses). Pure computation.',
     inputSchema: {
       type: 'object',
@@ -109,7 +111,8 @@ export const MCP_TOOLS = [
     title: 'Deployment registry',
     description:
       'The versioned BlazePhoenix deployment registry: Core, Hub, Solver, Quoter and Router addresses per chain and protocol '
-      + 'version (1.0.0 live; 2.0.0 the final generation), and which version each chain runs now.',
+      + 'version, each version with its status, and the version each chain resolves to as latest (`active`: the newest '
+      + 'non-deprecated version deployed on that chain).',
     inputSchema: { type: 'object', properties: {} },
     outputSchema: outSchema({ schema: I, updatedAt: S, versions: { type: 'array' }, active: O, localServer: S }),
     annotations: { title: 'Deployment registry', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
