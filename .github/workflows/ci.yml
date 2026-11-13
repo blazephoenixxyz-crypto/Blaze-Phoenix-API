@@ -5,11 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only token; no checkout leaves it in .git/config (the jobs run code from two lockfiles).
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -17,3 +23,31 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # The served staking ABI is the compiler's ABI of one named source revision, never a hand-kept
+  # list. The test suite pins the interface; this job proves the file against the source itself:
+  # check out the staking repository at the revision the generated file names, recompile with the
+  # checkout's own solc, and fail if the file differs by one byte (digest and revision included).
+  staking-abi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - id: rev
+        run: echo "rev=$(sed -n "s/^export const STAKING_ABI_SOURCE_REVISION = '\([0-9a-f]\{40\}\)' as const;$/\1/p" src/abis/staking.generated.ts)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: blazephoenixxyz-crypto/Blaze-Phoenix-Staking
+          ref: ${{ steps.rev.outputs.rev }}
+          path: staking
+          token: ${{ secrets.STAKING_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - run: npm ci --ignore-scripts
+        working-directory: staking
+      - run: node scripts/gen-staking-abi.mjs staking --check

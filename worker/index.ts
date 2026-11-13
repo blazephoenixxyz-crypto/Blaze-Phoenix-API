@@ -24,6 +24,7 @@ import {
   CORS_HEADERS,
 } from './quoteApi';
 import { handleOpenapi } from './openapi';
+import { handleVersion } from './version';
 import { handleSolvencyReport, handleBadge } from './solvency';
 import { handleMcp, MCP_CORS_HEADERS } from './mcp';
 import { setProviderKeys } from './providerKeys';
@@ -45,6 +46,8 @@ interface Env {
   // Deploy Hook URL for the scheduled rebuild (see scheduled() below).
   // Set as a secret, never in wrangler.jsonc: whoever holds it can queue builds.
   DEPLOY_HOOK_URL?: string;
+  // Source commit of this deploy (wrangler deploy --var COMMIT_SHA:$(git rev-parse HEAD)); /api/version.
+  COMMIT_SHA?: string;
   // Provider keys for the Worker's own reads (worker/providerKeys.ts). Secrets only.
   ALCHEMY_KEYS?: string;
   DRPC_KEY?: string;
@@ -195,7 +198,7 @@ export default {
     // pure; /api/quote and /api/quote/batch answer rpc_required with the
     // prepared call). stats/tape/badge/verify are the site's own edge-cached
     // dashboards — one read per cache window, whatever the caller count.
-    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/stats', '/api/badge', '/api/tape', '/api/verify'];
+    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/version', '/api/stats', '/api/badge', '/api/tape', '/api/verify'];
     if (API_PATHS.includes(path)) {
       try {
         // The actor verdict goes out in a header on ALL API responses, through a
@@ -234,6 +237,7 @@ export default {
         if (path === '/api/openapi.json') return mark(handleOpenapi());
         if (path === '/api') return mark(handleDiscovery());
         if (path === '/api/health') return mark(handleHealth());
+        if (path === '/api/version') return mark(handleVersion(env));
         if (path === '/api/stats') return mark(await handleStats());
         if (path === '/api/badge') return mark(await handleBadge());
         if (path === '/api/tape') return mark(await handleTape(url));

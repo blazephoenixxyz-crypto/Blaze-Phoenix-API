@@ -1,6 +1,8 @@
 // Checks that need no network, no key and no build: source checks, then the worker modules
 // themselves, transpiled in-process by the TypeScript compiler from devDependencies.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
@@ -340,6 +342,145 @@ try {
   } finally {
     Object.assign(set2, saved);
   }
+  // ── Staking: two independent deployments, each pinned by (chainId, address, codehash). ──
+  // Test chainIds 31337 and 31338 stand for the two deployments; the same address on both is the
+  // case CREATE produces from one deployer and nonce, so only the chainId and the code tell them apart.
+  try {
+    const v = await import('viem');
+    const gen = await load('src/abis/staking.generated.ts');
+    const { STAKING_ABI } = await load('src/abis/staking.ts');
+    const cfg = await load('src/config/staking.ts');
+    const { handleVersion } = await load('worker/version.ts');
+    const { formatAbiItem } = await import('viem/utils');
+    const canon = (abi) => abi.map((x) => (x.type === 'constructor' ? 'constructor' : `${x.type} ${formatAbiItem(x)}`));
+
+    // api_staking_abi_parity_with_src. The generated file is the compiler's ABI of the staking
+    // source at STAKING_ABI_SOURCE_REVISION (scripts/gen-staking-abi.mjs --check proves that against
+    // a checkout); here: the file is unedited, and the ABI the worker uses is that file, item for item.
+    check('staking abi: the generated file hashes to its recorded digest (no hand edit)',
+      v.keccak256(v.toBytes(JSON.stringify(gen.STAKING_ABI))) === gen.STAKING_ABI_DIGEST
+      && /^[0-9a-f]{40}$/.test(gen.STAKING_ABI_SOURCE_REVISION));
+    // api_staking_abi_interface_pin. The digest above is self-attested (a hand edit can rewrite it);
+    // this pin is not: the item count and the hash of the whole ABI (names, inputs, outputs,
+    // mutability), fixed here and never read from the file. CI recompiles the revision the file
+    // names and runs gen-staking-abi.mjs --check; a new interface changes this pin with the file.
+    check('staking abi: 174 items whose content hashes to the interface pinned in this suite, not to the file\'s own digest',
+      gen.STAKING_ABI.length === 174
+      && v.keccak256(v.toBytes(JSON.stringify(gen.STAKING_ABI))) === '0x854d437b9f3e47e55a17eb278017ba2c3f0ef32a6d2bb5577812419ec50309ef');
+    const served = canon(STAKING_ABI);
+    const fromSrc = canon(gen.STAKING_ABI);
+    check('staking abi: the worker ABI is the generated one, no phantom item and none missing',
+      served.length === fromSrc.length && served.every((k, i) => k === fromSrc[i])
+      && JSON.stringify(STAKING_ABI) === JSON.stringify(gen.STAKING_ABI));
+    const errs = (name) => STAKING_ABI.filter((x) => x.type === 'error' && x.name === name).length;
+    const decodes = (name) => {
+      try { return v.decodeErrorResult({ abi: STAKING_ABI, data: v.toFunctionSelector(`${name}()`) }).errorName === name; } catch { return false; }
+    };
+    check('staking abi: Staking__AlreadyFunded is not in the source, so not in the ABI',
+      errs('Staking__AlreadyFunded') === 0 && !decodes('Staking__AlreadyFunded'));
+    check('staking abi: reverts the source can raise decode by name (UtilTooHigh, EnforcedPause, StaleEquity, PaidIntoBreach, EmissionNotEnded)',
+      ['Staking__UtilTooHigh', 'EnforcedPause', 'Staking__StaleEquity', 'Staking__PaidIntoBreach', 'Staking__EmissionNotEnded'].every(decodes));
+    const report = {
+      backing: 2n ** 256n - 1n, owed: 1n, surplus: 0n, deficit: 0n, solvent: true, collateralRatioWad: 10n ** 18n + 1n,
+      totalStaked: 10n ** 18n, totalDebt: 0n, rewardReserve: 1n, protocolReserve: 0n, pendingDistribution: 0n, totalBadDebt: 0n, totalUncollectedInterest: 0n,
+    };
+    const solvencyRet = v.encodeFunctionResult({ abi: STAKING_ABI, functionName: 'solvency', result: report });
+    const back = v.decodeFunctionResult({ abi: STAKING_ABI, functionName: 'solvency', data: solvencyRet });
+    check('staking abi: solvency() round-trips the SolvencyReport struct (uint256 max, 1 wei)',
+      Object.keys(report).every((k) => back[k] === report[k]));
+
+    // staking_config_absent_is_not_zero_address
+    const ADDR = '0x00000000000000000000000000000000005fa1e0';
+    const CODE_A = '0x6080604052348015600e575f5ffd5b50600a';
+    const CODE_B = '0x6080604052348015600e575f5ffd5b50600b';
+    const depA = { chainId: 31337, address: ADDR, codehash: v.keccak256(CODE_A) };
+    const depB = { chainId: 31338, address: ADDR, codehash: v.keccak256(CODE_B) };
+    check('staking config: the published source configures no deployment -> not_deployed, on any chain id',
+      Object.keys(cfg.STAKING_DEPLOYMENTS).length === 0
+      && [31337, 31338, 1, 0, -1, 2 ** 53, NaN].every((id) => { const r = cfg.stakingDeployment(id); return !r.ok && r.code === 'not_deployed'; })
+      && cfg.stakingChainIds().length === 0);
+    const bad = (entry, key = entry.chainId) => {
+      cfg.STAKING_DEPLOYMENTS[key] = entry;
+      try { const r = cfg.stakingDeployment(key); return !r.ok && r.code === 'bad_config'; } finally { delete cfg.STAKING_DEPLOYMENTS[key]; }
+    };
+    check('staking config: the zero address is never a deployment (absent is not zero)', bad({ ...depA, address: ZERO }));
+    check('staking config: a zero codehash, or the codehash of no code, is never a pin',
+      bad({ ...depA, codehash: `0x${'0'.repeat(64)}` }) && bad({ ...depA, codehash: v.keccak256('0x') }) && bad({ ...depA, codehash: undefined }));
+    check('staking config: an entry whose chainId is not its key is refused', bad(depA, 31338));
+    check('staking config: a 19- or 21-byte address, or one nibble short or long, is refused',
+      [ADDR.slice(0, -2), `${ADDR}00`, ADDR.slice(0, -1), `${ADDR}0`].every((address) => bad({ ...depA, address })));
+    // staking_config_address_checksum (EIP-55). Mixed case must be the checksum case; all-lowercase
+    // carries no checksum and is accepted; all-uppercase is not a checksum form and is refused. What
+    // the lookup returns is the checksum form, so the manifest never republishes an address a strict
+    // consumer refuses. viem's getAddress is the oracle, not the code under test.
+    const lower = '0xabcdef0000000000000000000000000000000001';
+    const sum = v.getAddress(lower);
+    const upper = `0x${lower.slice(2).toUpperCase()}`;
+    const flipAt = 2 + sum.slice(2).search(/[a-f]/i);
+    const flipped = sum.slice(0, flipAt) + (sum[flipAt] === sum[flipAt].toLowerCase() ? sum[flipAt].toUpperCase() : sum[flipAt].toLowerCase()) + sum.slice(flipAt + 1);
+    const okAs = (address, expect) => {
+      cfg.STAKING_DEPLOYMENTS[31337] = { ...depA, address };
+      try { const r = cfg.stakingDeployment(31337); return r.ok && r.deployment.address === expect; } finally { delete cfg.STAKING_DEPLOYMENTS[31337]; }
+    };
+    check('staking config: a mixed-case address with a wrong EIP-55 checksum is refused (one letter flipped)',
+      flipAt > 1 && flipped !== sum && bad({ ...depA, address: flipped }) && bad({ ...depA, address: '0xAbCdEf0000000000000000000000000000000001' }));
+    check('staking config: all-uppercase is not a checksum form and is refused', upper !== sum && bad({ ...depA, address: upper }));
+    // Boundary: this address has hex letters where the hash nibble is exactly 8, the lowest that upper-cases.
+    const nib8 = '0xabcdef0000000000000000000000000000000006';
+    const nib8Hash = v.keccak256(v.stringToBytes(nib8.slice(2))).slice(2);
+    check('staking config: all-lowercase and the correct checksum are accepted and both resolve to the checksum form (hash nibble 8 included)',
+      okAs(lower, sum) && okAs(sum, sum) && okAs(ADDR, v.getAddress(ADDR))
+      && nib8Hash[2] === '8' && nib8Hash[4] === '8' && okAs(nib8, v.getAddress(nib8)) && okAs(v.getAddress(nib8), v.getAddress(nib8)));
+    // Seeded PRNG: 64 random addresses; lowercase passes and resolves to viem's checksum, one random
+    // letter flipped on the checksum form fails, unless the address has no letter at all.
+    let aseed = 0x5eed0055;
+    const arnd = () => { aseed = (aseed * 1103515245 + 12345) >>> 0; return aseed; };
+    const fuzzAddr = Array.from({ length: 64 }, () => `0x${Array.from({ length: 40 }, () => (arnd() >>> 16 & 15).toString(16)).join('')}`);
+    check('staking config: 64 seeded addresses: lowercase -> checksum form; one letter flipped on the checksum form -> refused',
+      fuzzAddr.every((a) => {
+        const s = v.getAddress(a);
+        const letters = [...s.slice(2)].map((c, i) => (/[a-z]/i.test(c) ? i + 2 : -1)).filter((i) => i >= 0);
+        if (!okAs(a, s) || !okAs(s, s)) return false;
+        if (letters.length === 0) return true;
+        const i = letters[arnd() % letters.length];
+        const f = s.slice(0, i) + (s[i] === s[i].toLowerCase() ? s[i].toUpperCase() : s[i].toLowerCase()) + s.slice(i + 1);
+        return bad({ ...depA, address: f });
+      }));
+    // staking_config_lookup_is_projected: the lookup hands out {chainId, address, codehash} and
+    // nothing else from the entry, so no extra field reaches a reader.
+    cfg.STAKING_DEPLOYMENTS[31337] = { ...depA, rpcs: ['http://example.invalid'], name: 'X' };
+    try {
+      const r = cfg.stakingDeployment(31337);
+      check('staking config: the lookup returns exactly {chainId, address, codehash} from an entry with extra fields',
+        r.ok && JSON.stringify(Object.keys(r.deployment).sort()) === '["address","chainId","codehash"]');
+    } finally { delete cfg.STAKING_DEPLOYMENTS[31337]; }
+    Object.assign(cfg.STAKING_DEPLOYMENTS, { 31337: depA, 31338: depB });
+    try {
+      const a = cfg.stakingDeployment(31337);
+      const b = cfg.stakingDeployment(31338);
+      check('staking config: two independent deployments at one address resolve each to its own codehash',
+        a.ok && b.ok && a.deployment.codehash === depA.codehash && b.deployment.codehash === depB.codehash
+        && cfg.stakingChainIds().join() === '31337,31338' && !cfg.stakingDeployment(31339).ok);
+    } finally {
+      delete cfg.STAKING_DEPLOYMENTS[31337];
+      delete cfg.STAKING_DEPLOYMENTS[31338];
+    }
+    // version_reports_commit_sha. Seeded PRNG: the same 64 SHAs every run.
+    let seed = 0x5eed1112;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed; };
+    const sha = () => Array.from({ length: 5 }, () => rnd().toString(16).padStart(8, '0')).join('');
+    const shas = Array.from({ length: 64 }, sha);
+    const served2 = await Promise.all(shas.map(async (s) => (await handleVersion({ COMMIT_SHA: s }).json()).commit));
+    check('version: /api/version reports the deploy commit it was given, 64 seeded SHAs',
+      served2.every((c, i) => c === shas[i]));
+    const s0 = shas[0];
+    const refused = [undefined, '', 'main', s0.slice(1), `${s0}0`, `${s0}\n`, ` ${s0}`, s0.toUpperCase(), `0x${s0}`, '0'.repeat(40)];
+    const answers = await Promise.all(refused.map(async (s) => { const r = handleVersion({ COMMIT_SHA: s }); return [r.status, await r.json()]; }));
+    check('version: absent or malformed COMMIT_SHA -> commit null and commitKnown false, never a guess',
+      answers.every(([st, b]) => st === 200 && b.commit === null && b.commitKnown === false));
+  } catch (e) {
+    check(`staking and version checks ran to the end (${e?.stack ?? e})`, false);
+  }
 } catch (e) {
   check(`behaviour checks ran to the end (${e?.stack ?? e})`, false);
 } finally {
@@ -373,6 +514,99 @@ check('docs: OpenAPI userMinOut is required for calldata (min_required) and exac
   && /name: 'exact'[^\n]*\n\s*description: '[^\n]*emits no calldata/.test(oapi));
 check('docs: README and llms.txt say calldata needs userMinOut (min_required) and exact emits none',
   [readme, llms].every((d) => /userMinOut/.test(d) && /min_required/.test(d) && /exact=1` never emits calldata/.test(d)));
+
+// /api/version is routed like every other API path and is handed the Worker env.
+const index = read('worker/index.ts');
+check('/api/version is an API path, answered by handleVersion(env)',
+  /API_PATHS = \[[^\]]*'\/api\/version'/.test(index) && /path === '\/api\/version'\) return mark\(handleVersion\(env\)\)/.test(index));
+
+// api_staking_abi_check_compares_content. scripts/gen-staking-abi.mjs --check is the guard that
+// recompiles the staking source (CI job staking-abi). Run the real script on a stand-in solc that
+// returns a given ABI: the ABI the file was generated from matches; a difference of the same
+// length (one letter of one name, one nibble of the revision) is red, as is one item fewer; and
+// --check never writes the file.
+{
+  const gen = await load('src/abis/staking.generated.ts');
+  const genPath = join(root, 'src/abis/staking.generated.ts');
+  const before = readFileSync(genPath);
+  const tmp = mkdtempSync(join(tmpdir(), 'staking-abi-check-'));
+  try {
+    mkdirSync(join(tmp, 'node_modules', 'solc'), { recursive: true });
+    mkdirSync(join(tmp, 'staking', 'src'), { recursive: true });
+    for (const f of ['BlazePhoenixStaking.sol', 'BlazePhoenixMathLib.sol']) writeFileSync(join(tmp, 'staking', 'src', f), '// stand-in\n');
+    writeFileSync(join(tmp, 'node_modules', 'solc', 'package.json'), '{"type":"commonjs","main":"index.js"}');
+    writeFileSync(join(tmp, 'node_modules', 'solc', 'index.js'), `const abi = require(process.env.STANDIN_ABI);
+module.exports = { version: () => ${JSON.stringify(gen.STAKING_ABI_COMPILER.replace(/^solc /, ''))},
+  compile: () => JSON.stringify({ contracts: { 'src/BlazePhoenixStaking.sol': { BlazePhoenixStaking: { abi } } } }) };
+`);
+    let n = 0;
+    const runCheck = (abi, rev = gen.STAKING_ABI_SOURCE_REVISION) => {
+      const abiFile = join(tmp, `abi-${n++}.json`);
+      writeFileSync(abiFile, JSON.stringify(abi));
+      try {
+        const out = execFileSync(process.execPath, [join(root, 'scripts/gen-staking-abi.mjs'), join(tmp, 'staking'), '--check'], {
+          env: { ...process.env, NODE_MODULES: join(tmp, 'node_modules'), STAKING_REV: rev, STANDIN_ABI: abiFile },
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        return { code: 0, out };
+      } catch (e) { return { code: e.status, out: String(e.stderr ?? '') }; }
+    };
+    const abi = JSON.parse(JSON.stringify(gen.STAKING_ABI));
+    const same = runCheck(abi);
+    check('staking abi --check: the ABI the file was generated from matches (exit 0)', same.code === 0 && /matches/.test(same.out));
+    const i = abi.findIndex((x) => x.type === 'function');
+    const name = abi[i].name;
+    const letter = abi.map((x, k) => (k === i ? { ...x, name: name.slice(0, -1) + (name.endsWith('a') ? 'b' : 'a') } : x));
+    check('staking abi --check: one letter of one function name changed (same file length) is red (exit 1)',
+      runCheck(letter).code === 1);
+    const rev = gen.STAKING_ABI_SOURCE_REVISION;
+    check('staking abi --check: the file names another revision (one nibble, same file length) is red (exit 1)',
+      runCheck(abi, rev.slice(0, -1) + (rev.endsWith('0') ? '1' : '0')).code === 1);
+    check('staking abi --check: one item fewer is red (exit 1)', runCheck(abi.slice(1)).code === 1);
+    check('staking abi --check: never writes the generated file', readFileSync(genPath).equals(before));
+  } finally {
+    if (!readFileSync(genPath).equals(before)) writeFileSync(genPath, before);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ci_staking_abi_job. The workflow is what runs --check against the staking source, and nothing
+// else reads it: a step removed, --check dropped, continue-on-error or an if: would stay green.
+// Read as text (no YAML dependency): a job is its 4-space block, a step its 6-space "- " item.
+const ciYml = read('.github/workflows/ci.yml');
+const ciBlock = (re) => (re.exec(ciYml) ?? [])[1] ?? '';
+const ciSteps = (block) => block.split(/^ {6}- /m).slice(1)
+  .map((s) => s.split('\n').filter((l, k) => k === 0 || l === '' || /^ {8}/.test(l)).join('\n'));
+const ciOn = ciBlock(/^on:\n((?:(?: {2,}.*)?\n)*)/m);
+const abiJob = ciBlock(/^ {2}staking-abi:\n((?:(?: {4,}.*)?\n)*)/m);
+const abiSteps = ciSteps(abiJob);
+check('ci: staking-abi runs on push to main and on every pull request',
+  /^ {2}push:\n {4}branches: \[main\]$/m.test(ciOn) && /^ {2}pull_request:/m.test(ciOn));
+check('ci: staking-abi runs gen-staking-abi.mjs --check at the repository root, with no if:, continue-on-error or STAKING_REV',
+  abiSteps.some((s) => /^run: node scripts\/gen-staking-abi\.mjs staking --check\s*$/m.test(s) && !/working-directory/.test(s))
+  && !/^\s*(?:- )?(?:if|continue-on-error):/m.test(abiJob) && !/STAKING_REV/.test(abiJob));
+const revStep = abiSteps.find((s) => /^\s*id: rev\s*$/m.test(s)) ?? '';
+const stakingCheckout = abiSteps.find((s) => /^\s*repository: blazephoenixxyz-crypto\/Blaze-Phoenix-Staking\s*$/m.test(s)) ?? '';
+let revOut = '';
+const revTmp = mkdtempSync(join(tmpdir(), 'ci-rev-'));
+try {
+  writeFileSync(join(revTmp, 'out'), '');
+  execFileSync('bash', ['-c', (/^\s*run: (.*)$/m.exec(revStep) ?? [])[1] ?? 'false'],
+    { cwd: root, env: { ...process.env, GITHUB_OUTPUT: join(revTmp, 'out') }, stdio: 'ignore' });
+  revOut = readFileSync(join(revTmp, 'out'), 'utf8');
+} catch { /* red below */ } finally { rmSync(revTmp, { recursive: true, force: true }); }
+const namedRev = (/^export const STAKING_ABI_SOURCE_REVISION = '([0-9a-f]{40})' as const;$/m.exec(read('src/abis/staking.generated.ts')) ?? [])[1];
+check('ci: staking-abi checks out the staking repository at the revision the generated file names',
+  !!namedRev && revOut === `rev=${namedRev}\n`
+  && /^\s*ref: \$\{\{ steps\.rev\.outputs\.rev \}\}\s*$/m.test(stakingCheckout) && /^\s*path: staking\s*$/m.test(stakingCheckout));
+// ci_token_read_only. The jobs run code from two lockfiles (the API's and the staking checkout's):
+// the workflow token is read-only and no checkout leaves it in .git/config.
+const ciCode = ciYml.replace(/^\s*#.*$/gm, '');
+const checkouts = ciSteps(ciYml.replace(/^ {2}\S.*$/gm, '')).filter((s) => /^\s*uses: actions\/checkout@/m.test(s));
+check('ci: the workflow token is read-only (top-level permissions: contents: read; no write anywhere)',
+  /^permissions:\n {2}contents: read\n(?! )/m.test(ciCode) && !/write/.test(ciCode));
+check('ci: every actions/checkout sets persist-credentials: false',
+  checkouts.length > 0 && checkouts.length === (ciCode.match(/uses: actions\/checkout@/g) ?? []).length
+  && checkouts.every((s) => /^\s*persist-credentials: false\s*$/m.test(s)));
 
 console.log(failed === 0 ? `✅ ${passed} passed, 0 failed` : `❌ ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
