@@ -12,14 +12,15 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { keccak256, toBytes } from 'viem';
 
 const [dir, flag] = process.argv.slice(2);
 if (!dir) { console.error('usage: gen-staking-abi.mjs <staking-checkout> [--check]'); process.exit(2); }
 const nm = process.env.NODE_MODULES || join(dir, 'node_modules');
-const solc = createRequire(join(nm, 'noop.js'))('solc');
+// createRequire needs an absolute path; CI passes the checkout as the relative path `staking`.
+const solc = createRequire(resolve(nm, 'noop.js'))('solc');
 
 let rev = process.env.STAKING_REV;
 if (!rev) {

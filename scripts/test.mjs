@@ -562,6 +562,16 @@ module.exports = { version: () => ${JSON.stringify(gen.STAKING_ABI_COMPILER.repl
     check('staking abi --check: the file names another revision (one nibble, same file length) is red (exit 1)',
       runCheck(abi, rev.slice(0, -1) + (rev.endsWith('0') ? '1' : '0')).code === 1);
     check('staking abi --check: one item fewer is red (exit 1)', runCheck(abi.slice(1)).code === 1);
+    // CI passes the checkout as a relative path (`staking`); createRequire refuses a relative one.
+    const relAbi = join(tmp, `abi-${n++}.json`);
+    writeFileSync(relAbi, JSON.stringify(abi));
+    let rel;
+    try {
+      rel = { code: 0, out: execFileSync(process.execPath, [join(root, 'scripts/gen-staking-abi.mjs'), 'staking', '--check'], {
+        cwd: tmp, env: { ...process.env, NODE_MODULES: 'node_modules', STAKING_REV: gen.STAKING_ABI_SOURCE_REVISION, STANDIN_ABI: relAbi },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+    } catch (e) { rel = { code: e.status, out: String(e.stderr ?? '') }; }
+    check('staking abi --check: a relative checkout and node_modules path, as CI passes them, matches (exit 0)', rel.code === 0 && /matches/.test(rel.out));
     check('staking abi --check: never writes the generated file', readFileSync(genPath).equals(before));
   } finally {
     if (!readFileSync(genPath).equals(before)) writeFileSync(genPath, before);
