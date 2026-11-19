@@ -17,9 +17,18 @@ curl -X POST https://blazephoenix.xyz/api/quote/decode -H 'content-type: applica
 
 In-process instead of HTTP: `npm i @blazephoenix/sdk viem`, or the local MCP server `npx -y @blazephoenix/mcp`, both reading your node from `BLAZEPHOENIX_RPC_URL` or `BLAZEPHOENIX_RPC_<CHAIN>`.
 
+USD value, derived on-chain with no price oracle and no third-party price API. `GET /api/quote/prepare?...&usd=1` adds `usd.in` next to the quote call: one more `eth_call`, to Multicall3 (`0xcA11bde05977b3631167028862bE2a173976CA11`), that values `amountIn` in dollars from the Quoter's own `previewPlan` net outputs. Run `usd.in.rpcRequest` on your node and send `{"usd": {"request": <usd.in.request>, "result": "<your node's result>"}}` to `POST /api/quote/decode` (alone, it returns just the USD value; sent together with `request` and `result` it is returned in the `usd` key). The decoded quote carries `usdOut`, the same call valuing the output, and its request has `usd: true`.
+
+- One `aggregate3` call, one block: the block number, the token decimals and every `previewPlan` quote are read in the same `eth_call`, so all vias come from one block. When the route crosses other tokens the answer is `next`, a second `aggregate3` pinned at the same block; `rpc.requests` says 1 or 2.
+- Anchors and vias: the dollar token is USDC (USDG on Robinhood Chain) and counts as exactly 1 USD; WETH is the second anchor. The amount is priced directly into the dollar token, through WETH, and through each token the direct route touches (at most 8 vias in all, at most 2 hops each). A leg token -> dollar is priced at the amount of that token the route moves (`scaledFrom`) and scaled linearly.
+- Conservative: `usdValue` is the minimum over the measured vias, the net output actually received after the 0.28% fee, including price impact. With two or more measured vias, `spread` gives `min`, `max`, `diff` and `bps`, with no threshold and no verdict.
+- Absent is not zero: a via that reverts, finds no route or nets 0 is `not measured`; with no via measured, `usd` and `unitPrice` are `not measured`, never 0. A token that is already the dollar token needs only the block and the decimals (one call, no Quoter call).
+- Label: the response says `USD (via USDC)` (or `USD (via USDG)`), with `dollarToken`, `blockNumber`, every via with its legs, `unitPrice` and a one-sentence `basis`.
+- Decentralised: this hosted endpoint only prepares and decodes; it performs no RPC. Your node answers the call.
+
 Protocol V1 is live on all five chains; V2 (Router, Solver, Hub, Quoter and Gate with the Core and Math libraries) is pending and is not planned for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version such as `2.0.0`).
 
-Remote MCP tools: `prepare_quote`, `decode_quote`, `get_deployments`, `get_abi`.
+Remote MCP tools: `prepare_quote` (with `usd: true` it also returns `usd.in`), `decode_quote` (returns `usdOut`), `decode_usd_value` (decodes a USD call result: `request` and `result`, pure), `get_deployments`, `get_abi`.
 
 ## Docs
 
@@ -32,6 +41,7 @@ Remote MCP tools: `prepare_quote`, `decode_quote`, `get_deployments`, `get_abi`.
 
 - [worker/quoteApi.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/quoteApi.ts): the `/api/*` routes
 - [worker/codec.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/codec.ts): prepare and decode, the pure quote codec
+- [worker/usd.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/usd.ts): the USD value, prepare and decode
 - [worker/mcp.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/mcp.ts): the remote MCP endpoint
 
 ## Related
