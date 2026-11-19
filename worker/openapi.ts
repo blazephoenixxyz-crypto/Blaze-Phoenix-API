@@ -174,6 +174,11 @@ const QUOTE_PARAMS = [
     description: 'exact=1 → previewPlanExact: every leg dry-run on its own venue in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes. Exact mode emits no calldata: prepare a preview with recipient and userMinOut for a transaction',
     schema: { type: 'string', enum: ['1'] },
   },
+  {
+    name: 'usd', in: 'query', required: false,
+    description: 'usd=1 adds `usd.in`: one Multicall3 eth_call (block, decimals, Quoter previewPlan netOuts) that values amountIn in "USD (via USDC)" (USDG on Robinhood Chain); the dollar token counts as 1 USD, no oracle. Send its answer to /api/quote/decode as `usd: { request, result }`; the decoded quote then carries `usdOut`, the same call for amountOut.',
+    schema: { type: 'string', enum: ['1', '0', 'true', 'false'] },
+  },
 ] as const;
 
 export const OPENAPI = {

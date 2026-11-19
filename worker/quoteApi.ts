@@ -44,6 +44,7 @@ import {
   minOutFor, DEFAULT_SLIPPAGE_BPS,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
+import { attachUsdOut, decodeUsd, prepareUsd } from './usd';
 import { SITE } from '../src/config/site';
 import { resolveSymbolViaDex, SYMBOLISH, type ResolvedSymbol } from '../src/lib/symbolResolve';
 
@@ -514,7 +515,9 @@ export function prepareFromParams(searchParams: URLSearchParams, nowSec = Math.f
     return parsed;
   }
   const p = parsed.params;
-  return prepareQuote({
+  const usd = searchParams.get('usd');
+  if (usd !== null && !['0', '1', 'true', 'false'].includes(usd)) return { ok: false, status: 400, code: 'bad_request', message: 'usd must be 1 or 0' };
+  const r = prepareQuote({
     chainId: p.chainId, tokenIn: p.tokenIn, tokenOut: p.tokenOut, amountIn: p.amountIn,
     nativeIn: p.nativeIn, nativeOut: p.nativeOut, exact: p.exact,
     ...(p.recipient ? { recipient: p.recipient } : {}),
@@ -523,6 +526,17 @@ export function prepareFromParams(searchParams: URLSearchParams, nowSec = Math.f
     ...(p.userMinOut !== undefined ? { userMinOut: p.userMinOut } : {}),
     ...(p.version !== undefined ? { version: p.version } : {}),
   }, nowSec);
+  if (!r.ok || (usd !== '1' && usd !== 'true')) return r;
+  // USD value of the input now; the decoded quote carries the call valuing its output (request.usd).
+  const u = prepareUsd(p.chainId, r.body.protocolVersion as string, p.tokenIn, p.amountIn);
+  return {
+    ok: true,
+    body: {
+      ...r.body,
+      request: { ...(r.body.request as Record<string, unknown>), usd: true },
+      usd: { in: u.ok ? u.body : { ok: false, code: u.code, error: u.message } },
+    },
+  };
 }
 
 /** GET /api/quote/prepare — zero RPC. */
@@ -571,9 +585,15 @@ export async function handleDecode(request: Request): Promise<Response> {
     });
     return json(200, { ok: true, count: results.length, results });
   }
+  const u = (body as { usd?: { request?: unknown; result?: unknown } })?.usd;
+  const usd = u !== undefined ? decodeUsd(u?.request, u?.result) : undefined;
+  if (usd && body?.request === undefined && body?.result === undefined) {
+    return usd.ok ? json(200, usd.body) : json(usd.status, { ok: false, code: usd.code, error: usd.message });
+  }
   const r = decodeQuote(body?.request, body?.result);
   if (!r.ok) return json(r.status, { ok: false, code: r.code, error: r.message });
-  return json(200, r.body);
+  const out = attachUsdOut(body?.request, r.body);
+  return json(200, usd ? { ...out, usd: usd.ok ? usd.body : { ok: false, code: usd.code, error: usd.message } } : out);
 }
 
 /** Bounded JSON body reader: the codec is pure CPU, so the only thing worth
@@ -1117,6 +1137,7 @@ export function handleDiscovery(): Response {
       prepare: { method: 'GET', path: '/api/quote/prepare', example: '/api/quote/prepare?chain=base&in=WETH&out=USDC&amountIn=1000000000000000000', note: 'the eth_call to run on your node (add recipient and userMinOut for swap calldata)' },
       prepareBatch: { method: 'POST', path: '/api/quote/prepare', note: `{ requests: [...] } → one JSON-RPC batch, max ${MAX_PREPARE_BATCH}` },
       decode: { method: 'POST', path: '/api/quote/decode', note: '{ request, result } → quote, Phoenix Check, calldata verified against the request (pure; simulate it from the payer before sending)' },
+      usdValue: { method: 'GET then POST', path: '/api/quote/prepare?…&usd=1 → /api/quote/decode', note: 'usd=1 adds `usd.in`: one Multicall3 eth_call valuing the input in USD (via USDC; USDG on Robinhood Chain) from Quoter netOuts on your node; POST { usd: { request, result } } to decode it (a second call, pinned at the same block, when the route discovers more vias). The decoded quote then carries `usdOut` for the output. Minimum over vias; "not measured" when none measured, never 0' },
       deployments: { method: 'GET', path: '/api/deployments', note: 'versioned registry: Core/Hub/Solver/Quoter/Router per chain and version' },
       abi: { method: 'GET', path: '/api/abi?contract=quoter', note: 'ABIs generated from the Solidity sources' },
       quote: { method: 'GET', path: '/api/quote', note: 'retired relay — answers 400 rpc_required with the prepared call inline' },
