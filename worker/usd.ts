@@ -3,7 +3,9 @@
 //  measured by the Quoter on YOUR node. No oracle, no third-party price API.
 //
 //    prepare → one Multicall3.aggregate3 eth_call (block number, decimals and
-//              one Quoter previewPlan per leg of every via)
+//              one Quoter previewPlan per leg of every via; the block number is
+//              ArbSys.arbBlockNumber on Arbitrum and Robinhood Chain, whose
+//              block.number is the L1 block)
 //    decode  → either the value, or a second aggregate3 pinned at the block of
 //              the first one when the direct route discovers more vias
 //
@@ -37,6 +39,14 @@ const MC3_ABI = parseAbi([
   'function getBlockNumber() view returns (uint256 blockNumber)',
 ]);
 const ERC20_ABI = parseAbi(['function decimals() view returns (uint8)']);
+/** ArbSys precompile: on Arbitrum and Arbitrum Orbit chains `block.number` (and so
+ *  Multicall3.getBlockNumber) is the L1 block; arbBlockNumber() is the L2 block that RPC
+ *  block tags count, so the reported block and the pinned block are the same number. */
+export const ARBSYS: Address = '0x0000000000000000000000000000000000000064';
+const ARBSYS_ABI = parseAbi(['function arbBlockNumber() view returns (uint256)']);
+/** Chains whose block number is read from ArbSys: Arbitrum One and Robinhood Chain (Orbit). */
+export const ARBSYS_BLOCK_CHAINS: readonly number[] = [42161, 4663];
+const arbBlock = (chainId: number) => ARBSYS_BLOCK_CHAINS.includes(chainId);
 
 export const USD_BASIS = 'Each via is the netOut the Quoter reports for A in one block: after the 0.28% fee, including price impact; '
   + 'an X -> dollar leg is priced at refX and scaled linearly. The value is the minimum over measured vias; the dollar token counts as 1 USD.';
@@ -71,7 +81,10 @@ function aggregateCall(chainId: SupportedChainId, quoter: Address, token: Addres
   const d = CHAINS[chainId].usdc;
   const decimals = (target: Address) => ({ target, allowFailure: true, callData: encodeFunctionData({ abi: ERC20_ABI, functionName: 'decimals' }) });
   const calls = [
-    { target: MULTICALL3, allowFailure: true, callData: encodeFunctionData({ abi: MC3_ABI, functionName: 'getBlockNumber' }) },
+    // The block the RPC tags count: block.number is the L1 block on Arbitrum chains.
+    arbBlock(chainId)
+      ? { target: ARBSYS, allowFailure: true, callData: encodeFunctionData({ abi: ARBSYS_ABI, functionName: 'arbBlockNumber' }) }
+      : { target: MULTICALL3, allowFailure: true, callData: encodeFunctionData({ abi: MC3_ABI, functionName: 'getBlockNumber' }) },
     // T == D (identity): block + decimals(D) only, no Quoter call; the amount is already in the dollar token.
     ...(same(token, d) ? [decimals(d)] : [decimals(token), decimals(d)]),
     ...vias.flatMap((v) => legsOf(v, amountIn)).map((l) => ({
@@ -228,12 +241,16 @@ export function decodeUsd(rawReq: unknown, rawResult: unknown): { ok: true; body
   const identity = same(q.token, CHAINS[q.chainId].usdc);
   const head = identity ? 2 : 3;
   if (results.length !== head + legs.length) return bad('result_mismatch', `usd.result has ${results.length} entries, this request makes ${head + legs.length}`, 422);
-  if (!results[0].success) return bad('result_mismatch', 'usd.result: the block number read failed', 422);
+  const arb = arbBlock(q.chainId);
+  const what = arb ? 'ArbSys.arbBlockNumber' : 'Multicall3.getBlockNumber';
+  if (!results[0].success) return bad('result_mismatch', `usd.result: the block number read (${what}) failed`, 422);
   let block: bigint;
   try {
-    block = decodeFunctionResult({ abi: MC3_ABI, functionName: 'getBlockNumber', data: results[0].returnData }) as bigint;
+    block = (arb
+      ? decodeFunctionResult({ abi: ARBSYS_ABI, functionName: 'arbBlockNumber', data: results[0].returnData })
+      : decodeFunctionResult({ abi: MC3_ABI, functionName: 'getBlockNumber', data: results[0].returnData })) as bigint;
   } catch {
-    return bad('result_mismatch', 'usd.result: the block number is unreadable', 422);
+    return bad('result_mismatch', `usd.result: ${what} answered no block number`, 422);
   }
   if (q.blockNumber !== undefined && block !== q.blockNumber) {
     return bad('result_mismatch', `usd.result is from block ${block}, the call is pinned at ${q.blockNumber}`, 422);

@@ -609,6 +609,59 @@ try {
     const rh = DEPLOYMENTS.versions.some((d) => d.chains[4663] && d.chains[4663].quoter !== ZERO);
     check('usd label: USD (via USDG) on Robinhood Chain', !rh || prepareUsd(4663, null, T, A).body.label === 'USD (via USDG)');
 
+    // The block on Arbitrum chains. A node at tag `tag`: on Arbitrum and Robinhood Chain (Orbit)
+    // block.number, so Multicall3.getBlockNumber, is the L1 block and ArbSys(0x64).arbBlockNumber()
+    // is the block the tag names (measured live 11-20: Arbitrum tag 525778791 -> getBlockNumber
+    // 26452919). Elsewhere 0x64 has no code: success with no data. `rest` answers calls 1..n.
+    const ARBSYS_ADDR = '0x0000000000000000000000000000000000000064';
+    const L1_BLOCK = 26_452_919n;
+    const nodeAt = (chainId, body, tag, rest) => {
+      const arb = [42161, 4663].includes(chainId);
+      return agg(callsOf(body).map((c, i) => {
+        if (c.target.toLowerCase() === ARBSYS_ADDR) return arb ? blockOf(tag) : ok('0x');
+        if (c.target.toLowerCase() === MULTICALL3.toLowerCase()) return blockOf(arb ? L1_BLOCK : tag);
+        return rest[i - 1];
+      }));
+    };
+    // Arbitrum, two stages (mutant: Multicall3.getBlockNumber on every chain -> stage 1 reports the
+    // L1 block 26452919 and pins stage 2 to it)
+    {
+      const aU = CHAINS[42161].usdc, aW = CHAINS[42161].weth, TAG = 525_778_791n;
+      const pa = prepareUsd(42161, null, T, A);
+      const s1 = pa.ok ? decodeUsd(pa.body.request, nodeAt(42161, pa.body, TAG, [dec(18), dec(6),
+        pp([T, X(0), aU], A, 5_000_000n, [A, 40n * ONE]), pp([T, aW], A, 10n ** 15n), pp([aW, aU], ONE, 3_000_000_000n)])) : pa;
+      const nxa = s1.ok ? s1.body.next : undefined;
+      const s2 = nxa ? decodeUsd(nxa.request, nodeAt(42161, nxa, BigInt(nxa.rpcRequest.params[1]), [dec(18), dec(6),
+        pp([T, X(0), aU], A, 5_000_000n, [A, 40n * ONE]), pp([T, aW], A, 10n ** 15n), pp([aW, aU], ONE, 3_000_000_000n),
+        pp([T, X(0)], A, 40n * ONE), pp([X(0), aU], 40n * ONE, 4_000_000n)])) : s1;
+      check('usd Arbitrum: the block is ArbSys.arbBlockNumber (the block RPC tags count), not the L1 block.number; stage 2 is pinned to it and completes there',
+        pa.ok && callsOf(pa.body)[0].target.toLowerCase() === ARBSYS_ADDR && callsOf(pa.body)[0].callData === '0xa3b1b31d'
+        && s1.ok && s1.body.blockNumber === String(TAG) && nxa?.request.blockNumber === String(TAG) && nxa?.rpcRequest.params[1] === `0x${TAG.toString(16)}`
+        && s2.ok && s2.body.complete && s2.body.blockNumber === String(TAG) && s2.body.usdValue === '3000000');
+    }
+    // Robinhood Chain (Orbit) at a given block (mutant: 4663 left out of ARBSYS_BLOCK_CHAINS)
+    if (rh) {
+      const rU = CHAINS[4663].usdc;
+      const pr = prepareUsd(4663, null, T, A);
+      const vr = decodeUsd(pr.body.request, nodeAt(4663, pr.body, 0x200n, [dec(18), dec(6), pp([T, rU], A, 2_000_000n), fail(), fail()]));
+      check('usd Robinhood Chain: the block is read from ArbSys, the reported block is the tag block',
+        callsOf(pr.body)[0].target.toLowerCase() === ARBSYS_ADDR && vr.ok && vr.body.blockNumber === '512' && vr.body.usdValue === '2000000');
+    }
+    // Base keeps Multicall3.getBlockNumber; 0x64 has no code there (mutant: ArbSys on every chain)
+    {
+      const vb = decodeUsd(r1, nodeAt(8453, p1.body, BLOCK, parityEntries.slice(1)));
+      check('usd Base: the block is Multicall3.getBlockNumber, not ArbSys',
+        callsOf(p1.body)[0].target === MULTICALL3 && vb.ok && vb.body.blockNumber === String(BLOCK) && vb.body.usdValue === '3000000');
+    }
+    // ArbSys answers no data (mutant: the block decode without the try, or an error that names
+    // Multicall3 on Arbitrum)
+    {
+      const pa = prepareUsd(42161, null, T, A);
+      const na = decodeUsd(pa.body.request, agg([ok('0x'), dec(18), dec(6), fail(), fail(), fail()]));
+      check('usd Arbitrum: ArbSys answers no data -> result_mismatch 422 naming ArbSys.arbBlockNumber, never a value at an unknown block',
+        !na.ok && na.code === 'result_mismatch' && na.status === 422 && /ArbSys\.arbBlockNumber/.test(na.message));
+    }
+
     // Wiring: REST prepare (usd=1 only), decode { usd }, MCP tools.
     const sp = (q) => new URLSearchParams(q);
     const plain = prepareFromParams(sp('chain=base&in=WETH&out=USDC&amountIn=1000000000000000000'));
