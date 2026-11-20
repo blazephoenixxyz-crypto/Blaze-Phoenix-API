@@ -43,6 +43,15 @@ such as `2.0.0`); without it, each chain uses its newest deployed version.
   proof-of-solvency: coming soon.
 - **Batch limits.** `POST /api/quote/prepare` takes up to 32 requests, and
   `POST /api/quote/decode` up to 32 items.
+- **USD value.** `usd=1` on prepare adds one more `eth_call` (Multicall3: block,
+  decimals and Quoter `previewPlan` net outputs through USDC, WETH and the tokens the
+  route crosses) that values the amount in "USD (via USDC)" (USDG on Robinhood Chain).
+  The dollar token counts as 1 USD; no oracle or third-party price. The value is the
+  minimum over the measured paths; a path that cannot be measured says `not measured`,
+  never 0 (`worker/usd.ts`). When the route crosses other tokens, decode returns a
+  second call pinned at the block hash of the first (EIP-1898, `requireCanonical`);
+  pass that hash as `blockHash` on prepare or `usd.blockHash` on decode, or the value
+  is `not measured` (never a call pinned by number).
 - **Metering.** Only requests that Cloudflare's bot score marks as suspect are metered
   (`worker/requestClass.ts`); verified crawlers and ordinary clients are not.
 

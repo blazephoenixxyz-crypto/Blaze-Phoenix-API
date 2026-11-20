@@ -123,6 +123,48 @@ const QUOTE_SCHEMA = {
   required: ['ok', 'mode', 'chainId', 'tokenIn', 'tokenOut', 'amountIn', 'amountOut', 'route'],
 } as const;
 
+/** POST /api/quote/decode with `usd` alone: the USD value (complete) or the second call to run (`next`). */
+const USD_SCHEMA = {
+  type: 'object',
+  description: 'A USD value decoded from YOUR node\'s aggregate3 answer: complete (usdValue, or "not measured" with a reason, never 0) '
+    + 'or, when the route crosses other tokens, complete false with `next`, the second call pinned at the first call\'s block hash.',
+  properties: {
+    ok: { type: 'boolean', enum: [true] },
+    mode: { type: 'string', enum: ['usd'] },
+    complete: { type: 'boolean' },
+    next: { type: 'object', description: 'complete false only: the prepared second call (stage 2), decoded the same way' },
+    chainId: { type: 'integer' },
+    version: { type: 'string' },
+    label: { type: 'string', description: 'USD (via USDC) | USD (via USDG)' },
+    dollarToken: { type: 'string' },
+    dollarDecimals: { type: ['integer', 'null'] },
+    token: { type: 'string' },
+    amountIn: { type: 'string' },
+    tokenDecimals: { type: ['integer', 'null'] },
+    blockNumber: { type: 'string' },
+    usdValue: { type: ['string', 'null'], description: 'minimum over measured vias, in dollar-token units; null when none is measured' },
+    usd: { type: 'string', description: 'usdValue in dollars, or "not measured"' },
+    unitPrice: { type: 'string', description: 'dollars per whole token, or "not measured"' },
+    vias: { type: 'array', items: { type: 'object' } },
+    spread: { type: ['object', 'null'] },
+    reason: { type: 'string', description: 'why the value is "not measured" when no via could be measured at a block hash' },
+    rpc: { type: 'object', properties: { requests: { type: 'integer', enum: [1, 2] } } },
+    basis: { type: 'string' },
+  },
+  required: ['ok', 'mode', 'complete'],
+} as const;
+
+/** A decoded quote; with `usd` in the body it also carries that USD value (or its error), and with `usd: true`
+ *  in its request the prepared call valuing its output. */
+const QUOTE_WITH_USD_SCHEMA = {
+  ...QUOTE_SCHEMA,
+  properties: {
+    ...QUOTE_SCHEMA.properties,
+    usd: { oneOf: [USD_SCHEMA, ERROR_SCHEMA], description: 'the USD value sent as `usd` beside request and result' },
+    usdOut: { type: 'object', description: 'request.usd true: the prepared eth_call valuing amountOut (prepared at latest; pin it at a block hash yourself)' },
+  },
+} as const;
+
 const QUOTE_PARAMS = [
   {
     name: 'chain', in: 'query', required: true,
@@ -173,6 +215,16 @@ const QUOTE_PARAMS = [
     name: 'exact', in: 'query', required: false,
     description: 'exact=1 → previewPlanExact: every leg dry-run on its own venue in this block (slower). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes. Exact mode emits no calldata: prepare a preview with recipient and userMinOut for a transaction',
     schema: { type: 'string', enum: ['1'] },
+  },
+  {
+    name: 'usd', in: 'query', required: false,
+    description: 'usd=1 adds `usd.in`: one Multicall3 eth_call (block, decimals, Quoter previewPlan netOuts) that values amountIn in "USD (via USDC)" (USDG on Robinhood Chain); the dollar token counts as 1 USD, no oracle. Send its answer to /api/quote/decode as `usd: { request, result }`; the decoded quote then carries `usdOut`, the same call for amountOut. When the route crosses other tokens, decode returns `next`, a second eth_call pinned at the block hash of the first (EIP-1898, requireCanonical): that needs the hash (blockHash here, or usd.blockHash on decode); without it the value is "not measured", never a call pinned by number.',
+    schema: { type: 'string', enum: ['1', '0', 'true', 'false'] },
+  },
+  {
+    name: 'blockHash', in: 'query', required: false,
+    description: 'with usd=1: the hash of the block to run `usd.in` at (read it with eth_getBlockByNumber); the call is pinned at { blockHash, requireCanonical: true } and the hash travels in usd.in.request, so a second call is pinned at the same block. A malformed hash is 400 bad_request',
+    schema: { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' },
   },
 ] as const;
 
@@ -242,11 +294,18 @@ export const OPENAPI = {
               request: { type: 'object', description: 'the `request` from /api/quote/prepare, verbatim' },
               result: { type: 'string', description: '0x hex result from your node' },
               items: { type: 'array', maxItems: MAX_PREPARE_BATCH, description: 'or many: [{ request, result }]' },
+              usd: { type: 'object', required: ['request', 'result'], description: 'USD value: { request, result, blockHash? } — request is usd.in.request (or a `next.request`) verbatim, result your node\'s hex; blockHash is the hash of the block the first USD call ran at (needed when the route crosses other tokens and prepare had no blockHash; if both are given they must agree, else 400)',
+                properties: {
+                  request: { type: 'object' },
+                  result: { type: 'string' },
+                  blockHash: { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' },
+                } },
             },
           } } },
         },
         responses: {
-          '200': { description: 'decoded quote', content: { 'application/json': { schema: QUOTE_SCHEMA } } },
+          '200': { description: 'decoded quote (with `usd` and `usdOut` when asked), or the USD value alone when the body has only `usd`',
+            content: { 'application/json': { schema: { oneOf: [QUOTE_WITH_USD_SCHEMA, USD_SCHEMA] } } } },
           '400': { description: 'invalid request/result', content: { 'application/json': { schema: ERROR_SCHEMA } } },
           '422': { description: 'empty result (no_route), not a Quoter answer (decode_failed), or not the Quoter answer to this request (result_mismatch)', content: { 'application/json': { schema: ERROR_SCHEMA } } },
         },

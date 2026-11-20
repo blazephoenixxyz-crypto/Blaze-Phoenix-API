@@ -16,6 +16,7 @@
 
 import { CORS_HEADERS, prepareFromParams, readJsonBody } from './quoteApi';
 import { decodeQuote, registryDocument } from './codec';
+import { attachUsdOut, decodeUsd } from './usd';
 import { QUOTER_ABI, ROUTER_ABI, SOLVER_ABI, HUB_ABI, CORE_ABI, BLAZE_ERRORS_ABI, ABI_SOURCE_REVISION } from '../src/abis/blaze';
 
 /** Protocol revisions this server speaks, newest first. initialize echoes the
@@ -54,6 +55,8 @@ const QUOTE_PARAMS = {
   deadlineSec: { type: 'integer', description: 'deadline horizon in seconds, 10–3600 (default 120)' },
   exact: { type: 'boolean', description: 'true → previewPlanExact: every leg dry-run on its own venue in this block (no calldata). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes; simulate the swap from the holder to test that' },
   version: { type: 'string', description: 'protocol version: latest (default) | 1 | 2 | 2.0.0' },
+  usd: { type: 'boolean', description: 'true → also `usd.in`: the eth_call valuing amountIn in USD (via USDC; USDG on Robinhood Chain), to decode with decode_usd_value; decode_quote then returns `usdOut`, the call valuing the output' },
+  blockHash: { type: 'string', description: 'with usd: the hash of the block to pin usd.in at ({blockHash, requireCanonical: true}); read it with eth_getBlockByNumber and pass it to decode_usd_value too' },
 } as const;
 
 // outputSchema: the exact top-level shape each tool returns (nested objects are
@@ -77,7 +80,7 @@ export const MCP_TOOLS = [
     inputSchema: { type: 'object', required: ['chain', 'in', 'out', 'amountIn'], properties: QUOTE_PARAMS },
     outputSchema: outSchema({
       mode: { const: 'prepare' }, chainId: I, protocolVersion: S, contracts: O, call: O, rpcRequest: O, curl: S,
-      request: O, decode: O, note: S, ...ERR,
+      request: O, decode: O, note: S, usd: O, ...ERR,
     }),
     annotations: { title: 'Prepare an on-chain quote', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -102,9 +105,41 @@ export const MCP_TOOLS = [
     outputSchema: outSchema({
       mode: { enum: ['preview', 'exact'] }, chainId: I, protocolVersion: S, tokenIn: S, tokenOut: S, amountIn: S,
       amountOut: S, grossAmountOut: S, quote: O, route: O, checks: O, exact: O, tx: O, minOut: S, deadline: S, entry: S,
-      encodedBy: S, txError: O, approval: O, wrapRequired: B, unwrapAfter: B, executeWith: O, meta: O, ...ERR,
+      encodedBy: S, txError: O, approval: O, wrapRequired: B, unwrapAfter: B, executeWith: O, meta: O, usdOut: O, ...ERR,
     }),
     annotations: { title: 'Decode a quote result', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'decode_usd_value',
+    title: 'Decode a USD value',
+    description:
+      'Decode the eth_call result YOUR node returned for a USD value (`usd.in` of prepare_quote with usd:true, or `usdOut` of '
+      + 'decode_quote): the amount in USD (via USDC; USDG on Robinhood Chain; the dollar token counts as 1 USD), measured as Quoter '
+      + 'netOut after the 0.28% fee, including price impact. Each via (direct, via WETH, via the tokens the direct route crosses; '
+      + 'at most 8) is listed; the value is the minimum over measured vias, with the spread when two or more are measured. A via '
+      + 'that reverts, finds no route or nets 0 is "not measured"; with none measured the value is "not measured", never 0. When '
+      + 'the route crosses other tokens, the answer is `next`: a second eth_call pinned at the block hash of the first (EIP-1898, '
+      + 'requireCanonical); run it and decode that one. That needs blockHash, the hash of the block the first call ran at (read the '
+      + 'header with eth_getBlockByNumber and pin the call there, or pass blockHash to prepare_quote, which pins usd.in only). usdOut of '
+      + 'decode_quote is prepared at latest: replace latest with {blockHash, requireCanonical: true} of a header you read, run it, and '
+      + 'pass that hash here as blockHash. Without a hash the value is '
+      + '"not measured", never a call pinned by number. If your node answers an error for the hash, start again. Pure computation.',
+    inputSchema: {
+      type: 'object',
+      required: ['request', 'result'],
+      properties: {
+        request: { type: 'object', description: 'the `request` object of the USD call (usd.in, usdOut or next), verbatim' },
+        result: { type: 'string', description: 'the 0x hex result of that eth_call on your node' },
+        blockHash: { type: 'string', description: 'the hash of the block the first USD call ran at (optional; needed when the route crosses other tokens)' },
+      },
+    },
+    outputSchema: outSchema({
+      mode: { const: 'usd' }, complete: B, next: O, chainId: I, version: S, label: S, dollarToken: S,
+      dollarDecimals: { type: ['integer', 'null'] }, token: S, amountIn: S, tokenDecimals: { type: ['integer', 'null'] },
+      blockNumber: S, usdValue: { type: ['string', 'null'] }, usd: S, unitPrice: S, vias: { type: 'array' },
+      spread: { type: ['object', 'null'] }, reason: S, rpc: O, basis: S, ...ERR,
+    }),
+    annotations: { title: 'Decode a USD value', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'get_deployments',
@@ -167,6 +202,7 @@ export function callTool(name: string, args: Json): { text: string; isError: boo
       const v = args[k];
       if (v === undefined || v === null || v === '') continue;
       if (k === 'exact') { if (v === true || v === 'true' || v === '1') sp.set('exact', '1'); continue; }
+      if (k === 'usd') { if (v === true || v === 'true' || v === '1') sp.set('usd', '1'); continue; }
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') sp.set(k, String(v));
     }
     if (!sp.has('chain')) sp.set('chain', 'base');
@@ -175,6 +211,10 @@ export function callTool(name: string, args: Json): { text: string; isError: boo
   }
   if (name === 'decode_quote') {
     const r = decodeQuote(args.request, args.result);
+    return out(r.ok ? attachUsdOut(args.request, r.body) : { ok: false, code: r.code, error: r.message });
+  }
+  if (name === 'decode_usd_value') {
+    const r = decodeUsd(args.request, args.result, args.blockHash);
     return out(r.ok ? r.body : { ok: false, code: r.code, error: r.message });
   }
   if (name === 'get_deployments') {
