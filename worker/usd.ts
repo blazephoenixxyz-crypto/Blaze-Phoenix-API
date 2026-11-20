@@ -6,8 +6,11 @@
 //              one Quoter previewPlan per leg of every via; the block number is
 //              ArbSys.arbBlockNumber on Arbitrum and Robinhood Chain, whose
 //              block.number is the L1 block)
-//    decode  → either the value, or a second aggregate3 pinned at the block of
-//              the first one when the direct route discovers more vias
+//    decode  → either the value, or a second aggregate3 pinned at the block HASH
+//              of the first one (EIP-1898, requireCanonical) when the direct route
+//              discovers more vias. A pin by number would read whatever block holds
+//              that height after a reorg; a hash is one block or an error. Without
+//              the hash the second call is not prepared: the value is "not measured"
 //
 //  The dollar token D is CHAINS[chain].usdc (USDC; USDG on Robinhood Chain) and
 //  is treated as 1 USD: the value is "USD (via USDC)", not a dollar price.
@@ -20,7 +23,7 @@
 //  is measured the value is "not measured", never 0. Pure: no fetch, no state.
 // =============================================================================
 
-import { decodeErrorResult, decodeFunctionResult, encodeFunctionData, formatUnits, getAddress, parseAbi, toHex, type Hex } from 'viem';
+import { decodeErrorResult, decodeFunctionResult, encodeFunctionData, formatUnits, getAddress, parseAbi, type Hex } from 'viem';
 import { BLAZE_ERRORS_ABI, QUOTER_ABI } from '../src/abis/blaze';
 import { CHAINS, type SupportedChainId } from '../src/config/chains';
 import { MAX_RESULT_HEX, resolveVersion, routeIsConsistent, type Address, type Preview, type Route } from './codec';
@@ -58,6 +61,9 @@ const bad = (code: string, message: string, status = 400): Fail => ({ ok: false,
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const INT = /^\d{1,78}$/;
+const HASH32 = /^0x[0-9a-fA-F]{64}$/;
+/** An EIP-1898 block parameter: that block, and an error rather than another block if it is no longer canonical. */
+const pinAt = (blockHash: Hex) => ({ blockHash, requireCanonical: true });
 
 export const dollarLabel = (chainId: number) => (chainId === 4663 ? 'USD (via USDG)' : 'USD (via USDC)');
 
@@ -98,9 +104,9 @@ function aggregateCall(chainId: SupportedChainId, quoter: Address, token: Addres
 const viaJson = (v: Via) => ({ path: v.path, ...(v.ref !== undefined ? { ref: v.ref.toString() } : {}) });
 
 function preparedBody(chainId: SupportedChainId, version: string, quoter: Address, token: Address, amountIn: bigint,
-  vias: Via[], stage: 1 | 2, blockNumber?: bigint) {
+  vias: Via[], stage: 1 | 2, blockHash?: Hex, blockNumber?: bigint) {
   const call = { to: MULTICALL3, data: aggregateCall(chainId, quoter, token, amountIn, vias) };
-  const rpcRequest = { jsonrpc: '2.0', id: 1, method: 'eth_call', params: [call, blockNumber !== undefined ? toHex(blockNumber) : 'latest'] };
+  const rpcRequest = { jsonrpc: '2.0', id: 1, method: 'eth_call', params: [call, blockHash !== undefined ? pinAt(blockHash) : 'latest'] };
   return {
     ok: true,
     mode: 'usd-prepare',
@@ -111,25 +117,35 @@ function preparedBody(chainId: SupportedChainId, version: string, quoter: Addres
     request: {
       kind: 'usd', stage, chainId, version, token, amountIn: amountIn.toString(), vias: vias.map(viaJson),
       ...(blockNumber !== undefined ? { blockNumber: blockNumber.toString() } : {}),
+      ...(blockHash !== undefined ? { blockHash } : {}),
     },
-    decode: { method: 'POST', path: '/api/quote/decode', body: { usd: { request: '<the `request` object above, verbatim>', result: '<the eth_call result hex from YOUR node>' } } },
+    decode: { method: 'POST', path: '/api/quote/decode', body: { usd: {
+      request: '<the `request` object above, verbatim>', result: '<the eth_call result hex from YOUR node>',
+      ...(stage === 1 && blockHash === undefined ? { blockHash: '<the hash of the block this eth_call ran at (optional)>' } : {}),
+    } } },
     note: stage === 1
-      ? 'Run this eth_call on YOUR node and decode it. If the direct route crosses other tokens, decode returns a second call pinned at the same block.'
-      : 'Second and last call: every via, pinned at the block of the first call, so all of them come from one block.',
+      ? (blockHash !== undefined
+        ? 'Run this eth_call on YOUR node (pinned at blockHash) and decode it. If the direct route crosses other tokens, decode returns a second call pinned at the same block hash.'
+        : 'Run this eth_call on YOUR node and decode it. If the direct route crosses other tokens, a second call is needed and it is pinned at the block hash of this one: '
+          + 'read the header first (eth_getBlockByNumber), pass its hash as blockHash and run this call there, or the value is "not measured".')
+      : 'Second and last call: every via, pinned at the block hash of the first call (requireCanonical), so all of them come from one block. '
+        + 'If your node answers an error (the block was reorganised away), start again from stage 1.',
   };
 }
 
-/** Prepare the first eth_call of a USD value. Pure. */
-export function prepareUsd(chainId: SupportedChainId, version: string | null | undefined, token: Address, amountIn: bigint):
-  { ok: true; body: Record<string, unknown> } | Fail {
+/** Prepare the first eth_call of a USD value, at `latest` or pinned at `blockHash`. Pure. */
+export function prepareUsd(chainId: SupportedChainId, version: string | null | undefined, token: Address, amountIn: bigint,
+  blockHash?: string | null): { ok: true; body: Record<string, unknown> } | Fail {
   const dep = resolveVersion(chainId, version);
   if (!dep.ok) return bad(dep.code, dep.message);
   if (amountIn <= 0n || amountIn > UINT128_MAX) return bad('bad_amount', 'amountIn must be between 1 and 2^128-1 for a USD value');
+  if (blockHash != null && !HASH32.test(blockHash)) return bad('bad_request', 'blockHash must be a 32-byte 0x hash');
   const t = getAddress(token);
-  return { ok: true, body: preparedBody(chainId, dep.version, dep.contracts.quoter, t, amountIn, defaultVias(chainId, t), 1) };
+  const h = blockHash != null ? (blockHash.toLowerCase() as Hex) : undefined;
+  return { ok: true, body: preparedBody(chainId, dep.version, dep.contracts.quoter, t, amountIn, defaultVias(chainId, t), 1, h) };
 }
 
-type ParsedUsd = { chainId: SupportedChainId; version: string; quoter: Address; token: Address; amountIn: bigint; stage: 1 | 2; vias: Via[]; blockNumber?: bigint };
+type ParsedUsd = { chainId: SupportedChainId; version: string; quoter: Address; token: Address; amountIn: bigint; stage: 1 | 2; vias: Via[]; blockNumber?: bigint; blockHash?: Hex };
 
 function parseUsdRequest(raw: unknown): { ok: true; r: ParsedUsd } | Fail {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad('bad_request', 'usd.request must be the object the USD prepare returned');
@@ -146,9 +162,11 @@ function parseUsdRequest(raw: unknown): { ok: true; r: ParsedUsd } | Fail {
   const amountIn = BigInt(r.amountIn);
   if (amountIn <= 0n || amountIn > UINT128_MAX) return bad('bad_amount', 'usd.request.amountIn must be between 1 and 2^128-1');
   if (r.stage !== 1 && r.stage !== 2) return bad('bad_request', 'usd.request.stage must be 1 or 2');
+  if (r.blockHash !== undefined && (typeof r.blockHash !== 'string' || !HASH32.test(r.blockHash))) return bad('bad_request', 'usd.request.blockHash must be a 32-byte 0x hash');
+  const blockHash = typeof r.blockHash === 'string' ? (r.blockHash.toLowerCase() as Hex) : undefined;
   const token = getAddress(r.token);
   const base = defaultVias(cid, token);
-  if (r.stage === 1) return { ok: true, r: { chainId: cid, version: dep.version, quoter: dep.contracts.quoter, token, amountIn, stage: 1, vias: base } };
+  if (r.stage === 1) return { ok: true, r: { chainId: cid, version: dep.version, quoter: dep.contracts.quoter, token, amountIn, stage: 1, vias: base, blockHash } };
 
   // Stage 2: the default vias (re-derived, never read from the caller), then the discovered ones, checked.
   if (typeof r.blockNumber !== 'string' || !INT.test(r.blockNumber)) return bad('bad_request', 'usd.request.blockNumber missing');
@@ -165,7 +183,7 @@ function parseUsdRequest(raw: unknown): { ok: true; r: ParsedUsd } | Fail {
     seen.add((p[1] as string).toLowerCase());
     vias.push({ path: [token, getAddress(p[1] as string), d], ref: BigInt(ref) });
   }
-  return { ok: true, r: { chainId: cid, version: dep.version, quoter: dep.contracts.quoter, token, amountIn, stage: 2, vias, blockNumber: BigInt(r.blockNumber) } };
+  return { ok: true, r: { chainId: cid, version: dep.version, quoter: dep.contracts.quoter, token, amountIn, stage: 2, vias, blockNumber: BigInt(r.blockNumber), blockHash } };
 }
 
 type Res = { success: boolean; returnData: Hex };
@@ -223,11 +241,18 @@ function discoveredVias(route: Route, token: Address, chainId: SupportedChainId,
   return out;
 }
 
-/** Decode one USD eth_call result: the value, or (stage 1 only) the second call to run. Pure. */
-export function decodeUsd(rawReq: unknown, rawResult: unknown): { ok: true; body: Record<string, unknown> } | Fail {
+/** Decode one USD eth_call result: the value, or (stage 1 only) the second call to run. `blockHash` is the
+ *  hash of the block the stage-1 call ran at (also read from the request when prepare pinned it). Pure. */
+export function decodeUsd(rawReq: unknown, rawResult: unknown, rawBlockHash?: unknown): { ok: true; body: Record<string, unknown> } | Fail {
   const parsed = parseUsdRequest(rawReq);
   if (!parsed.ok) return parsed;
   const q = parsed.r;
+  if (rawBlockHash != null && (typeof rawBlockHash !== 'string' || !HASH32.test(rawBlockHash))) return bad('bad_request', 'usd.blockHash must be a 32-byte 0x hash');
+  const given = typeof rawBlockHash === 'string' ? (rawBlockHash.toLowerCase() as Hex) : undefined;
+  if (given !== undefined && q.blockHash !== undefined && given !== q.blockHash) {
+    return bad('bad_request', 'usd.blockHash differs from usd.request.blockHash: decode the call with the hash it ran at');
+  }
+  const blockHash = q.blockHash ?? given;
   if (typeof rawResult !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(rawResult) || rawResult.length > MAX_RESULT_HEX) {
     return bad('bad_result', 'usd.result must be the 0x hex your node returned for the prepared eth_call');
   }
@@ -257,6 +282,21 @@ export function decodeUsd(rawReq: unknown, rawResult: unknown): { ok: true; body
   }
   const dD = decimalsOf(results[head - 1]);
   const dT = identity ? dD : decimalsOf(results[1]);
+  const d = CHAINS[q.chainId].usdc;
+  // No block hash, no second call and no value from it: "not measured" is a result, never a number pin.
+  const notMeasured = (reason: string) => ({
+    ok: true as const,
+    body: {
+      ok: true, mode: 'usd', complete: true,
+      chainId: q.chainId, version: q.version, label: dollarLabel(q.chainId), dollarToken: d, dollarDecimals: dD,
+      token: q.token, amountIn: q.amountIn.toString(), tokenDecimals: dT, blockNumber: block.toString(),
+      usdValue: null, usd: 'not measured', unitPrice: 'not measured', vias: [], spread: null, reason,
+      rpc: { requests: q.stage }, basis: USD_BASIS,
+    },
+  });
+  if (q.stage === 2 && blockHash === undefined) {
+    return notMeasured('no blockHash: this second call is not pinned to the block hash of the first, so its vias may come from another block');
+  }
   const measured = legs.map((l, i) => measureLeg(results[head + i], l));
 
   // Stage 1: if the direct route crosses other tokens, every via is re-read in ONE call at this block.
@@ -264,12 +304,15 @@ export function decodeUsd(rawReq: unknown, rawResult: unknown): { ok: true; body
   if (q.stage === 1 && direct && 'out' in direct) {
     const extra = discoveredVias(direct.route, q.token, q.chainId, MAX_VIAS - q.vias.length);
     if (extra.length > 0) {
-      const next = preparedBody(q.chainId, q.version, q.quoter, q.token, q.amountIn, [...q.vias, ...extra], 2, block);
+      if (blockHash === undefined) {
+        return notMeasured('no blockHash: the route crosses other tokens and the second call can only be pinned to the block hash of the first; '
+          + 'run stage 1 at a block hash and pass it as blockHash');
+      }
+      const next = preparedBody(q.chainId, q.version, q.quoter, q.token, q.amountIn, [...q.vias, ...extra], 2, blockHash, block);
       return { ok: true, body: { ok: true, mode: 'usd', complete: false, blockNumber: block.toString(), next } };
     }
   }
 
-  const d = CHAINS[q.chainId].usdc;
   const vias: Record<string, unknown>[] = [];
   const values: bigint[] = [];
   if (q.vias.length === 0) {

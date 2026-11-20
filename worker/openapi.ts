@@ -176,8 +176,13 @@ const QUOTE_PARAMS = [
   },
   {
     name: 'usd', in: 'query', required: false,
-    description: 'usd=1 adds `usd.in`: one Multicall3 eth_call (block, decimals, Quoter previewPlan netOuts) that values amountIn in "USD (via USDC)" (USDG on Robinhood Chain); the dollar token counts as 1 USD, no oracle. Send its answer to /api/quote/decode as `usd: { request, result }`; the decoded quote then carries `usdOut`, the same call for amountOut.',
+    description: 'usd=1 adds `usd.in`: one Multicall3 eth_call (block, decimals, Quoter previewPlan netOuts) that values amountIn in "USD (via USDC)" (USDG on Robinhood Chain); the dollar token counts as 1 USD, no oracle. Send its answer to /api/quote/decode as `usd: { request, result }`; the decoded quote then carries `usdOut`, the same call for amountOut. When the route crosses other tokens, decode returns `next`, a second eth_call pinned at the block hash of the first (EIP-1898, requireCanonical): that needs the hash (blockHash here, or usd.blockHash on decode); without it the value is "not measured", never a call pinned by number.',
     schema: { type: 'string', enum: ['1', '0', 'true', 'false'] },
+  },
+  {
+    name: 'blockHash', in: 'query', required: false,
+    description: 'with usd=1: the hash of the block to run `usd.in` at (read it with eth_getBlockByNumber); the call is pinned at { blockHash, requireCanonical: true } and the hash travels in usd.in.request, so a second call is pinned at the same block. A malformed hash is 400 bad_request',
+    schema: { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' },
   },
 ] as const;
 
@@ -247,6 +252,12 @@ export const OPENAPI = {
               request: { type: 'object', description: 'the `request` from /api/quote/prepare, verbatim' },
               result: { type: 'string', description: '0x hex result from your node' },
               items: { type: 'array', maxItems: MAX_PREPARE_BATCH, description: 'or many: [{ request, result }]' },
+              usd: { type: 'object', description: 'USD value: { request, result, blockHash? } — request is usd.in.request (or a `next.request`) verbatim, result your node\'s hex; blockHash is the hash of the block the first USD call ran at (needed when the route crosses other tokens and prepare had no blockHash; if both are given they must agree, else 400)',
+                properties: {
+                  request: { type: 'object' },
+                  result: { type: 'string' },
+                  blockHash: { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' },
+                } },
             },
           } } },
         },

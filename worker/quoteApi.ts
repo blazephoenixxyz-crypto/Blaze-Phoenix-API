@@ -527,8 +527,9 @@ export function prepareFromParams(searchParams: URLSearchParams, nowSec = Math.f
     ...(p.version !== undefined ? { version: p.version } : {}),
   }, nowSec);
   if (!r.ok || (usd !== '1' && usd !== 'true')) return r;
-  // USD value of the input now; the decoded quote carries the call valuing its output (request.usd).
-  const u = prepareUsd(p.chainId, r.body.protocolVersion as string, p.tokenIn, p.amountIn);
+  // USD value of the input now (pinned at blockHash when given); the decoded quote carries the call valuing its output (request.usd).
+  const u = prepareUsd(p.chainId, r.body.protocolVersion as string, p.tokenIn, p.amountIn, searchParams.get('blockHash'));
+  if (!u.ok && u.code === 'bad_request') return { ok: false, status: 400, code: u.code, message: u.message };
   return {
     ok: true,
     body: {
@@ -585,8 +586,8 @@ export async function handleDecode(request: Request): Promise<Response> {
     });
     return json(200, { ok: true, count: results.length, results });
   }
-  const u = (body as { usd?: { request?: unknown; result?: unknown } })?.usd;
-  const usd = u !== undefined ? decodeUsd(u?.request, u?.result) : undefined;
+  const u = (body as { usd?: { request?: unknown; result?: unknown; blockHash?: unknown } })?.usd;
+  const usd = u !== undefined ? decodeUsd(u?.request, u?.result, u?.blockHash) : undefined;
   if (usd && body?.request === undefined && body?.result === undefined) {
     return usd.ok ? json(200, usd.body) : json(usd.status, { ok: false, code: usd.code, error: usd.message });
   }

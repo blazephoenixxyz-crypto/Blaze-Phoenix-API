@@ -56,6 +56,7 @@ const QUOTE_PARAMS = {
   exact: { type: 'boolean', description: 'true → previewPlanExact: every leg dry-run on its own venue in this block (no calldata). No tokens move from a holder, so a token that blocks or taxes its own transfer still quotes; simulate the swap from the holder to test that' },
   version: { type: 'string', description: 'protocol version: latest (default) | 1 | 2 | 2.0.0' },
   usd: { type: 'boolean', description: 'true → also `usd.in`: the eth_call valuing amountIn in USD (via USDC; USDG on Robinhood Chain), to decode with decode_usd_value; decode_quote then returns `usdOut`, the call valuing the output' },
+  blockHash: { type: 'string', description: 'with usd: the hash of the block to pin usd.in at ({blockHash, requireCanonical: true}); read it with eth_getBlockByNumber and pass it to decode_usd_value too' },
 } as const;
 
 // outputSchema: the exact top-level shape each tool returns (nested objects are
@@ -117,21 +118,24 @@ export const MCP_TOOLS = [
       + 'netOut after the 0.28% fee, including price impact. Each via (direct, via WETH, via the tokens the direct route crosses; '
       + 'at most 8) is listed; the value is the minimum over measured vias, with the spread when two or more are measured. A via '
       + 'that reverts, finds no route or nets 0 is "not measured"; with none measured the value is "not measured", never 0. When '
-      + 'the route crosses other tokens, the answer is `next`: a second eth_call pinned at the same block; run it and decode that '
-      + 'one. Pure computation.',
+      + 'the route crosses other tokens, the answer is `next`: a second eth_call pinned at the block hash of the first (EIP-1898, '
+      + 'requireCanonical); run it and decode that one. That needs blockHash, the hash of the block the first call ran at (read the '
+      + 'header with eth_getBlockByNumber and pin the call there, or pass blockHash to prepare_quote); without it the value is '
+      + '"not measured", never a call pinned by number. If your node answers an error for the hash, start again. Pure computation.',
     inputSchema: {
       type: 'object',
       required: ['request', 'result'],
       properties: {
         request: { type: 'object', description: 'the `request` object of the USD call (usd.in, usdOut or next), verbatim' },
         result: { type: 'string', description: 'the 0x hex result of that eth_call on your node' },
+        blockHash: { type: 'string', description: 'the hash of the block the first USD call ran at (optional; needed when the route crosses other tokens)' },
       },
     },
     outputSchema: outSchema({
       mode: { const: 'usd' }, complete: B, next: O, chainId: I, version: S, label: S, dollarToken: S,
       dollarDecimals: { type: ['integer', 'null'] }, token: S, amountIn: S, tokenDecimals: { type: ['integer', 'null'] },
       blockNumber: S, usdValue: { type: ['string', 'null'] }, usd: S, unitPrice: S, vias: { type: 'array' },
-      spread: { type: ['object', 'null'] }, rpc: O, basis: S, ...ERR,
+      spread: { type: ['object', 'null'] }, reason: S, rpc: O, basis: S, ...ERR,
     }),
     annotations: { title: 'Decode a USD value', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -208,7 +212,7 @@ export function callTool(name: string, args: Json): { text: string; isError: boo
     return out(r.ok ? attachUsdOut(args.request, r.body) : { ok: false, code: r.code, error: r.message });
   }
   if (name === 'decode_usd_value') {
-    const r = decodeUsd(args.request, args.result);
+    const r = decodeUsd(args.request, args.result, args.blockHash);
     return out(r.ok ? r.body : { ok: false, code: r.code, error: r.message });
   }
   if (name === 'get_deployments') {
