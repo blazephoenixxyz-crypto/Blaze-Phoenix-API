@@ -26,7 +26,7 @@
 import { decodeErrorResult, decodeFunctionResult, encodeFunctionData, formatUnits, getAddress, parseAbi, type Hex } from 'viem';
 import { BLAZE_ERRORS_ABI, QUOTER_ABI } from '../src/abis/blaze';
 import { CHAINS, type SupportedChainId } from '../src/config/chains';
-import { MAX_RESULT_HEX, resolveVersion, routeIsConsistent, type Address, type Preview, type Route } from './codec';
+import { MAX_RESULT_HEX, overspends, resolveVersion, routeIsConsistent, type Address, type Preview, type Route } from './codec';
 
 /** Multicall3, same address on every BlazePhoenix chain (eth_getCode checked on all five, 2026-11-20). */
 export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
@@ -151,6 +151,8 @@ function parseUsdRequest(raw: unknown): { ok: true; r: ParsedUsd } | Fail {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad('bad_request', 'usd.request must be the object the USD prepare returned');
   const r = raw as Record<string, unknown>;
   if (r.kind !== 'usd') return bad('bad_request', 'usd.request.kind must be "usd"');
+  // A primitive first: Number() of an object can throw (a null toString) instead of answering bad_chain.
+  if (typeof r.chainId !== 'number' && typeof r.chainId !== 'string') return bad('bad_chain', 'usd.request.chainId is not a BlazePhoenix chain');
   const chainId = Number(r.chainId);
   if (!(chainId in CHAINS)) return bad('bad_chain', 'usd.request.chainId is not a BlazePhoenix chain');
   const cid = chainId as SupportedChainId;
@@ -209,6 +211,8 @@ function measureLeg(res: Res, spec: LegSpec): Leg {
   }
   if (pv.route.hops.length === 0) return { reason: 'empty route' };
   if (!routeIsConsistent(pv.route, spec.tokenIn, spec.tokenOut)) return { reason: 'route does not connect the leg tokens' };
+  // The same spend bound as a decoded quote: hop 0 may commit less than the leg amount, never more.
+  if (overspends(pv.route, spec.amountIn)) return { reason: 'route spends more than the leg amount' };
   if (pv.netOut === 0n) return { reason: 'netOut is 0' };
   return { out: pv.netOut, route: pv.route };
 }
@@ -298,6 +302,18 @@ export function decodeUsd(rawReq: unknown, rawResult: unknown, rawBlockHash?: un
     return notMeasured('no blockHash: this second call is not pinned to the block hash of the first, so its vias may come from another block');
   }
   const measured = legs.map((l, i) => measureLeg(results[head + i], l));
+
+  // Stage 2: the discovered vias come from the stage-1 direct route. Re-read at this block, the direct route
+  // must cross the same tokens with the same amounts; otherwise the two calls ran at different blocks.
+  if (q.stage === 2) {
+    const nBase = defaultVias(q.chainId, q.token).length;
+    const again = nBase > 0 && 'out' in measured[0] ? discoveredVias(measured[0].route, q.token, q.chainId, MAX_VIAS - nBase) : [];
+    const key = (vs: Via[]) => vs.map((v) => `${v.path[1].toLowerCase()}:${v.ref}`).join(',');
+    if (key(again) !== key(q.vias.slice(nBase))) {
+      return bad('result_mismatch', 'usd.result: the direct route at this block does not cross the tokens the first call found, so the two calls '
+        + 'are from different blocks; start again from stage 1 pinned at a block hash', 422);
+    }
+  }
 
   // Stage 1: if the direct route crosses other tokens, every via is re-read in ONE call at this block.
   const direct = measured[0];

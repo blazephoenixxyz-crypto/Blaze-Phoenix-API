@@ -806,6 +806,60 @@ try {
     const httpH = await handleDecode(new Request('https://blazephoenix.xyz/api/quote/decode', { method: 'POST', body: JSON.stringify({ usd: { request: r1, result: agg(discEntries), blockHash: hh } }) }));
     const httpB = await httpH.json();
     check('usd REST: decode { usd: { blockHash } } pins `next` at that hash', httpH.status === 200 && JSON.stringify(httpB.next?.rpcRequest.params[1]) === pinOf(hh));
+    // ── CodeRabbit review of 46f56ba. Each check names the mutant of the fix that turns it red.
+    // chainId: a JSON object whose toString is null makes Number() throw (mutant M-k: drop the primitive check -> 'threw')
+    const objChain = decodeUsd({ ...r1, chainId: { toString: null } }, agg(parityEntries));
+    check('usd decode: an object chainId (null toString) -> bad_chain, no throw', !objChain.ok && objChain.code === 'bad_chain');
+    const objHttp = await handleDecode(new Request('https://blazephoenix.xyz/api/quote/decode', { method: 'POST', body: JSON.stringify({ usd: { request: { ...r1, chainId: { toString: null } }, result: agg(parityEntries) } }) }));
+    check('usd REST: an object chainId -> 400 bad_chain', objHttp.status === 400 && (await objHttp.json()).code === 'bad_chain');
+    check('usd decode: chainId as the number prepare wrote and as a decimal string still decode',
+      typeof r1.chainId === 'number' && decodeUsd(r1, agg(parityEntries)).ok && decodeUsd({ ...r1, chainId: '8453' }, agg(parityEntries)).ok);
+    // Spend bound (mutant M-l: drop the overspends test in measureLeg): a leg route that spends more than the leg amount
+    // is not this leg's answer, so it is "not measured", never valued as the requested amount.
+    const over = decodeUsd(r1, agg([blockOf(), dec(18), dec(6), pp([T, base.usdc], 2n * A, 9_000_000n), pp([T, base.weth], A, 10n ** 15n), pp([base.weth, base.usdc], ONE, 3_000_000_000n)]));
+    check('usd direct leg spending 2A for a request of A: not measured (spends more), value from the WETH via',
+      over.ok && over.body.vias[0].status === 'not measured' && /spends more/.test(over.body.vias[0].reason) && over.body.usdValue === '3000000');
+    const overRef = decodeUsd(r1, agg([blockOf(), dec(18), dec(6), pp([T, base.usdc], A, 5_000_000n), pp([T, base.weth], A, 10n ** 15n), pp([base.weth, base.usdc], ONE + 1n, 3_000_000_000n)]));
+    check('usd X -> dollar leg spending refX + 1 wei: that via not measured, value from the direct via',
+      overRef.ok && overRef.body.vias[1].status === 'not measured' && /spends more/.test(overRef.body.vias[1].reason) && overRef.body.usdValue === '5000000');
+    const partial = decodeUsd(r1, agg([blockOf(), dec(18), dec(6), pp([T, base.usdc], A, 5_000_000n, [A - 1n]), pp([T, base.weth], A, 10n ** 15n), pp([base.weth, base.usdc], ONE, 3_000_000_000n)]));
+    check('usd partial fill (hop 0 commits A - 1 wei) is still measured', partial.ok && partial.body.vias[0].status === 'measured' && partial.body.usdValue === '3000000');
+    // Stage 2 re-reads the direct route at the pinned block; it must cross the tokens stage 1 found with the same refs
+    // (mutant M-m: drop the stage-2 route check; M-n: compare the tokens but not the refs).
+    const otherX = [blockOf(), ...st2.slice(1, 3), pp([T, X(1), base.usdc], A, 5_000_000n, [A, 40n * ONE]), ...st2.slice(4)];
+    const mixX = decodeUsd(nx.request, agg(otherX));
+    check('usd stage 2 whose direct route crosses another token than stage 1 found -> result_mismatch 422, never a mixed value',
+      !mixX.ok && mixX.code === 'result_mismatch' && mixX.status === 422);
+    const otherRef = [blockOf(), ...st2.slice(1, 3), pp([T, X(0), base.usdc], A, 5_000_000n, [A, 40n * ONE + 1n]), ...st2.slice(4)];
+    const mixRef = decodeUsd(nx.request, agg(otherRef));
+    check('usd stage 2 whose direct route moves another amount of X (ref + 1 wei) -> result_mismatch', !mixRef.ok && mixRef.code === 'result_mismatch');
+    const goneDirect = decodeUsd(nx.request, agg([blockOf(), ...st2.slice(1, 3), fail(), ...st2.slice(4)]));
+    check('usd stage 2 whose direct route reverts (stage 1 measured it) -> result_mismatch', !goneDirect.ok && goneDirect.code === 'result_mismatch');
+    // OpenAPI (mutants M-o: drop required on usd; M-p: 200 declares the quote schema only)
+    const { OPENAPI } = await load('worker/openapi.ts');
+    const dec0 = OPENAPI.paths['/api/quote/decode'].post;
+    const usdIn = dec0.requestBody.content['application/json'].schema.properties.usd;
+    check('openapi: decode `usd` requires request and result, blockHash optional',
+      JSON.stringify(usdIn.required) === '["request","result"]' && !!usdIn.properties.blockHash);
+    const variants = dec0.responses['200'].content['application/json'].schema.oneOf ?? [];
+    const usdVar = variants.find((v) => JSON.stringify(v.properties?.mode?.enum) === '["usd"]');
+    const quoteVar = variants.find((v) => JSON.stringify(v.properties?.mode?.enum) === '["preview","exact"]');
+    const declares = (v, body) => !!v && Object.keys(body).every((k) => k in v.properties);
+    const nm = decodeUsd(r1, agg(discEntries));
+    check('openapi: decode 200 has a USD variant declaring every key of a complete value, a `next` answer and a "not measured" one',
+      declares(usdVar, fin.body) && declares(usdVar, disc.body) && nm.ok && nm.body.usd === 'not measured' && declares(usdVar, nm.body));
+    check('openapi: decode 200 quote variant declares usd and usdOut', !!quoteVar && 'usd' in quoteVar.properties && 'usdOut' in quoteVar.properties);
+    // Docs (mutant: the old wording back)
+    const llmsTxt = read('llms.txt');
+    check('docs: llms.txt counts legs per via, not hops', !/at most 2 hops each/.test(llmsTxt) && /at most 2 legs each/.test(llmsTxt));
+    check('docs: llms.txt calls a via through X a scaled estimate, not the output received',
+      !/net output actually received/.test(llmsTxt) && /scaled estimate/.test(llmsTxt));
+    const usdDesc = MCP_TOOLS.find((t) => t.name === 'decode_usd_value').description;
+    check('MCP: decode_usd_value says prepare_quote blockHash pins usd.in only and usdOut must be pinned by the caller',
+      /pins usd\.in only/.test(usdDesc) && /usdOut of decode_quote is prepared at latest[^.]*blockHash/.test(usdDesc));
+    const discNote = (await handleDiscovery().json()).endpoints.usdValue.note;
+    check('discovery: usdValue note shows prepare with blockHash, the hash-pinned call, and a fresh hash after a reorg',
+      /&blockHash=/.test(discNote) && /hash-pinned usd\.in\.rpcRequest/.test(discNote) && /prepare again with a fresh hash/.test(discNote));
     const dq0 = callTool('decode_quote', { request: plain.body.request, result: encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlan', result: [qpv, qpv.route, false] }) });
     check('usd MCP: decode_quote without request.usd has no usdOut', !dq0.isError && !('usdOut' in dq0.body));
   }

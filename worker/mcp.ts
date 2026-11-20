@@ -120,7 +120,9 @@ export const MCP_TOOLS = [
       + 'that reverts, finds no route or nets 0 is "not measured"; with none measured the value is "not measured", never 0. When '
       + 'the route crosses other tokens, the answer is `next`: a second eth_call pinned at the block hash of the first (EIP-1898, '
       + 'requireCanonical); run it and decode that one. That needs blockHash, the hash of the block the first call ran at (read the '
-      + 'header with eth_getBlockByNumber and pin the call there, or pass blockHash to prepare_quote); without it the value is '
+      + 'header with eth_getBlockByNumber and pin the call there, or pass blockHash to prepare_quote, which pins usd.in only). usdOut of '
+      + 'decode_quote is prepared at latest: replace latest with {blockHash, requireCanonical: true} of a header you read, run it, and '
+      + 'pass that hash here as blockHash. Without a hash the value is '
       + '"not measured", never a call pinned by number. If your node answers an error for the hash, start again. Pure computation.',
     inputSchema: {
       type: 'object',

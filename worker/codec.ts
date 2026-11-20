@@ -387,7 +387,7 @@ function packMismatches(pv: Preview, version: string): string[] {
 }
 
 /** Hop 0 may commit less than the request (a partial fill, refunded by the Router), never more. */
-function overspends(route: Route, amountIn: bigint): boolean {
+export function overspends(route: Route, amountIn: bigint): boolean {
   const h0 = route.hops[0];
   if (!h0) return false;
   const committed = h0.legs.reduce((s, l) => s + l.amountIn, 0n);
