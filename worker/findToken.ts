@@ -10,8 +10,11 @@
 //  answer carries `verify`, how to read each candidate on YOUR node (findToken
 //  from @blazephoenix/sdk/find, or the find_token tool of the local MCP).
 //
-//  The index lookups are the SDK's, unchanged: findToken runs with a reader
-//  that refuses every chain read, so only its proposal step does any work.
+//  The index lookups are the SDK's, unchanged: findToken runs with sources
+//  'centralized' (the SDK's on-chain index would need an RPC; the Worker's own
+//  keys are never used for it) and a reader that refuses every chain read, so
+//  only its proposal step does any work. The answer says `measured: 'not
+//  measured on-chain'`; the on-chain index and depth run in findToken on YOUR RPC.
 //  (The SDK exports no proposals-only function; when it does, call that.)
 // =============================================================================
 
@@ -28,6 +31,8 @@ export interface FindDeps {
 }
 
 export const STATUS = 'unverified proposals';
+/** Nothing in the answer was measured on chain: the index lookups only (SDK sources 'centralized'). */
+export const MEASURED = 'not measured on-chain';
 
 export const VERIFY = {
   note: 'Nothing here was read on chain: an index can propose any address. Read each candidate on YOUR RPC before using it.',
@@ -62,7 +67,7 @@ export async function handleFindToken(url: URL, deps: FindDeps = { findToken: sd
   if (query === null || query.trim() === '') return fail(400, 'bad_query', 'query: a name or ticker');
 
   try {
-    const r = await deps.findToken({ query, chainId, reader: NO_READ, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
+    const r = await deps.findToken({ query, chainId, sources: 'centralized', reader: NO_READ, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
     const proposed = r.candidates.length + r.omitted;
     const failedSources = r.sources.filter((s) => !s.ok).map((s) => s.name);
     // Absent is not zero: with an index down, the count covers only the indexes that answered.
@@ -70,6 +75,7 @@ export async function handleFindToken(url: URL, deps: FindDeps = { findToken: sd
     return json(200, {
       ok: true,
       status: STATUS,
+      measured: MEASURED,
       query: r.query,
       chainId: r.chainId,
       candidates: r.candidates.map((c) => ({ address: c.address, chainId: r.chainId, sources: c.sources })),

@@ -927,6 +927,16 @@ try {
       // mutant: reader: NO_READ dropped (the SDK then wants an rpc -> 400) or any chain read wired in -> red
       check('find: only the two index hosts are fetched, nothing reaches any other host',
         ok.seen.length > 0 && ok.seen.every((u) => /^https:\/\/api\.(coingecko|dexscreener)\.com\//.test(u)) && stray.length === 0);
+      // mutant: `sources: 'centralized'` dropped from the findToken call (SDK >= 1.8.0 then defaults to its
+      // on-chain index, which wants an rpc -> 400 bad_request) or `measured` dropped -> red
+      const calls = [];
+      const spy = async (req) => { calls.push(req); return sdkFindToken(req); };
+      const spied = await handleFindToken(new URL('https://blazephoenix.xyz/api/token/find?chain=base&query=PEPE'), { findToken: spy, fetch: indexes().fn });
+      const spiedBody = await spied.json();
+      check("find: findToken runs with sources 'centralized' and no rpc; the answer says not measured on-chain and points to findToken on your RPC",
+        spied.status === 200 && calls.length === 1 && calls[0].sources === 'centralized' && !('rpc' in calls[0])
+        && spiedBody.measured === 'not measured on-chain' && ok.body.measured === 'not measured on-chain'
+        && /findToken\(\{[^}]*rpc: '<your RPC>'/.test(spiedBody.verify?.sdk ?? ''));
       // mutant: cache-control removed or set to a max-age -> red
       check('find: answer is never cached (no-store) and open CORS', ok.res.headers.get('cache-control') === 'no-store'
         && ok.res.headers.get('access-control-allow-origin') === '*');
@@ -969,6 +979,10 @@ try {
     const op = OPENAPI.paths['/api/token/find'];
     check('find: OpenAPI has GET only, parameters chain and query, no rpc',
       !!op?.get && !op.post && JSON.stringify(op.get.parameters.map((x) => x.name)) === '["chain","query"]');
+    // mutant: `measured` left out of the OpenAPI 200 answer -> red
+    check('find: OpenAPI 200 answer requires measured and says not measured on-chain',
+      op?.get?.responses?.['200']?.content?.['application/json']?.schema?.required?.includes('measured')
+      && /measured "not measured on-chain"/.test(op?.get?.responses?.['200']?.description ?? ''));
     check('find: README and llms.txt say unverified proposals, no RPC taken, verify on your own node',
       /unverified proposals/.test(read('README.md')) && /takes no RPC/.test(read('README.md'))
       && /unverified proposals/.test(read('llms.txt')) && /rpc_not_accepted/.test(read('llms.txt')));

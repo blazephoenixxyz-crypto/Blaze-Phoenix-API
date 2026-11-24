@@ -397,11 +397,11 @@ export const OPENAPI = {
         ],
         responses: {
           '200': {
-            description: 'status "unverified proposals"; candidates (address, chainId, sources: the indexes that proposed it); omitted (proposals past the SDK '
+            description: 'status "unverified proposals"; measured "not measured on-chain" (index proposals only; the on-chain index runs in findToken on your RPC); candidates (address, chainId, sources: the indexes that proposed it); omitted (proposals past the SDK '
               + 'cap of 10); sources (each index ok, or its error) and failedSources (the name of every index that failed); verify (findToken from '
               + '@blazephoenix/sdk/find, or the find_token tool of the local MCP, both on your RPC); warnings (always: N tokens use this ticker, impostors '
               + 'copy tickers, do your own research; liquidity is not safety)',
-            content: { 'application/json': { schema: { type: 'object', required: ['ok', 'status', 'query', 'chainId', 'candidates', 'omitted', 'sources', 'failedSources', 'verify', 'warnings'] } } },
+            content: { 'application/json': { schema: { type: 'object', required: ['ok', 'status', 'measured', 'query', 'chainId', 'candidates', 'omitted', 'sources', 'failedSources', 'verify', 'warnings'] } } },
           },
           '400': { description: 'rpc_not_accepted, bad_chain, chain_not_live, bad_query or bad_request', content: { 'application/json': { schema: ERROR_SCHEMA } } },
           '502': { description: 'find_failed: the search did not complete', content: { 'application/json': { schema: ERROR_SCHEMA } } },
