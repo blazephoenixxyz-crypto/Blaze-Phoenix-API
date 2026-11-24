@@ -385,6 +385,29 @@ export const OPENAPI = {
         responses: { '200': { description: 'badge (schemaVersion 1)', content: { 'application/json': {} } } },
       },
     },
+    '/api/token/find': {
+      get: {
+        operationId: 'findTokenProposals',
+        summary: 'UNVERIFIED proposals for a name or ticker on one chain: the addresses two third-party indexes (CoinGecko, Dexscreener) propose, '
+          + 'each with the index that proposed it. No chain is read and no RPC is taken (an rpc parameter is refused, never fetched); nothing is '
+          + 'ranked by liquidity or labelled, and nothing here picks a token. `verify` says how to read each candidate on YOUR node. Never cached',
+        parameters: [
+          { name: 'chain', in: 'query', required: true, schema: { type: 'string' }, description: 'chain id or name (base, eth, optimism, arbitrum, robinhood)' },
+          { name: 'query', in: 'query', required: true, schema: { type: 'string' }, description: 'a name or ticker, e.g. PEPE' },
+        ],
+        responses: {
+          '200': {
+            description: 'status "unverified proposals"; candidates (address, chainId, sources: the indexes that proposed it); omitted (proposals past the SDK '
+              + 'cap of 10); sources (each index ok, or its error) and failedSources (the name of every index that failed); verify (findToken from '
+              + '@blazephoenix/sdk/find, or the find_token tool of the local MCP, both on your RPC); warnings (always: N tokens use this ticker, impostors '
+              + 'copy tickers, do your own research; liquidity is not safety)',
+            content: { 'application/json': { schema: { type: 'object', required: ['ok', 'status', 'query', 'chainId', 'candidates', 'omitted', 'sources', 'failedSources', 'verify', 'warnings'] } } },
+          },
+          '400': { description: 'rpc_not_accepted, bad_chain, chain_not_live, bad_query or bad_request', content: { 'application/json': { schema: ERROR_SCHEMA } } },
+          '502': { description: 'find_failed: the search did not complete', content: { 'application/json': { schema: ERROR_SCHEMA } } },
+        },
+      },
+    },
     '/api/verify': {
       get: {
         operationId: 'verifyFact',

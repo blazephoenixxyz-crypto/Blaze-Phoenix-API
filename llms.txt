@@ -29,6 +29,8 @@ USD value, derived on-chain with no price oracle and no third-party price API. `
 
 Protocol V1 is live on all five chains; V2 (Router, Solver, Hub, Quoter and Gate with the Core and Math libraries) is pending and is not planned for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version such as `2.0.0`).
 
+Token finder: `GET /api/token/find?chain=base&query=PEPE` returns unverified proposals only: the addresses CoinGecko and Dexscreener propose for a name or ticker, each with the index that proposed it, and `failedSources` naming any index that failed. It reads no chain, takes no RPC (an `rpc` parameter answers `400 rpc_not_accepted`) and ranks nothing by liquidity. Verify each candidate on your own node with `findToken` from `@blazephoenix/sdk/find` or the local MCP tool `find_token`; the warnings are always there: N tokens use this ticker, impostors copy tickers, do your own research; liquidity is not safety.
+
 Remote MCP tools: `prepare_quote` (with `usd: true` it also returns `usd.in`; `blockHash` pins it), `decode_quote` (returns `usdOut`), `decode_usd_value` (decodes a USD call result: `request`, `result` and the optional `blockHash`, pure), `get_deployments`, `get_abi`.
 
 ## Docs
@@ -43,6 +45,7 @@ Remote MCP tools: `prepare_quote` (with `usd: true` it also returns `usd.in`; `b
 - [worker/quoteApi.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/quoteApi.ts): the `/api/*` routes
 - [worker/codec.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/codec.ts): prepare and decode, the pure quote codec
 - [worker/usd.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/usd.ts): the USD value, prepare and decode
+- [worker/findToken.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/findToken.ts): `/api/token/find`, unverified proposals from the SDK's index lookups, no chain read
 - [worker/mcp.ts](https://raw.githubusercontent.com/blazephoenixxyz-crypto/Blaze-Phoenix-API/main/worker/mcp.ts): the remote MCP endpoint
 
 ## Related

@@ -863,6 +863,116 @@ try {
     const dq0 = callTool('decode_quote', { request: plain.body.request, result: encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlan', result: [qpv, qpv.route, false] }) });
     check('usd MCP: decode_quote without request.usd has no usdOut', !dq0.isError && !('usdOut' in dq0.body));
   }
+  // ── Token finder (worker/findToken.ts): unverified proposals from the SDK's index lookups, no chain
+  // read, no RPC taken. Each check names, in its comment, the mutant of worker/findToken.ts that turns it red.
+  {
+    const { handleFindToken } = await load('worker/findToken.ts');
+    const { findToken: sdkFindToken, WARNINGS } = await import('@blazephoenix/sdk/find');
+    const A = '0x00000000000000000000000000000000000000a1';
+    const B = '0x00000000000000000000000000000000000000b2';
+    const WETH_BASE = '0x4200000000000000000000000000000000000006';
+    const answer = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    /** Index stub: CoinGecko proposes A, Dexscreener proposes A and B on Base (and a WETH quote token that does not match). */
+    const indexes = (opts = {}) => {
+      const seen = [];
+      const fn = async (input) => {
+        const u = String(input instanceof Request ? input.url : input);
+        seen.push(u);
+        if (u.startsWith('https://api.coingecko.com/api/v3/search')) return answer({ coins: [{ id: 'pepe', symbol: 'PEPE', name: 'Pepe' }] });
+        if (u.startsWith('https://api.coingecko.com/api/v3/coins/pepe')) return answer({ platforms: { base: A } });
+        if (u.startsWith('https://api.dexscreener.com/latest/dex/search')) {
+          if (opts.dexDown) return answer({ error: 'down' }, 500);
+          return answer({ pairs: [
+            { chainId: 'base', baseToken: { address: B, symbol: 'PEPE', name: 'Pepe' }, quoteToken: { address: WETH_BASE, symbol: 'WETH', name: 'Wrapped Ether' } },
+            { chainId: 'base', baseToken: { address: A, symbol: 'PEPE', name: 'Pepe' }, quoteToken: { address: WETH_BASE, symbol: 'WETH', name: 'Wrapped Ether' } },
+          ] });
+        }
+        return answer({ error: 'unexpected' }, 599);
+      };
+      return { fn, seen };
+    };
+    // Any request outside the index stub (a node, a host the caller named) lands here.
+    const realFetch = globalThis.fetch;
+    const stray = [];
+    globalThis.fetch = async (input) => { stray.push(String(input instanceof Request ? input.url : input)); return answer({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'stub' } }); };
+    try {
+      const run = async (qs, opts) => {
+        const ix = indexes(opts);
+        const res = await handleFindToken(new URL(`https://blazephoenix.xyz/api/token/find?${qs}`), { findToken: sdkFindToken, fetch: ix.fn });
+        return { res, body: await res.json(), seen: ix.seen };
+      };
+      const ok = await run('chain=base&query=PEPE');
+      const byAddr = new Map((ok.body.candidates ?? []).map((c) => [c.address.toLowerCase(), c]));
+      // mutant: candidates mapped without `sources` (or proposals merged per index) -> red
+      check('find: 200 unverified proposals, A from both indexes and B from Dexscreener, chainId on each',
+        ok.res.status === 200 && ok.body.status === 'unverified proposals' && byAddr.size === 2
+        && JSON.stringify(byAddr.get(A)?.sources?.slice().sort()) === '["coingecko","dexscreener"]'
+        && JSON.stringify(byAddr.get(B)?.sources) === '["dexscreener"]'
+        && (ok.body.candidates ?? []).every((c) => c.chainId === 8453));
+      // mutant: candidates returned as the SDK's (`...c`: rank, label, depth, liquidity) -> red
+      check('find: a candidate carries address, chainId and sources only (no rank, label, depth, liquidity)',
+        (ok.body.candidates ?? []).every((c) => JSON.stringify(Object.keys(c).sort()) === '["address","chainId","sources"]'));
+      // mutant: WARNINGS.mostLiquid or WARNINGS.trust added to the warnings -> red
+      check('find: no "most liquid", no ranking and no claim of an on-chain read in the answer',
+        !/most liquid|"rank"|read on your RPC\./i.test(JSON.stringify(ok.body)));
+      // mutant: proposed = r.candidates.length - r.omitted or 0; drop WARNINGS.notSafety -> red
+      check('find: warnings are exactly the ticker warning with N = 2 and liquidity is not safety',
+        JSON.stringify(ok.body.warnings) === JSON.stringify([WARNINGS.dyor(2), WARNINGS.notSafety])
+        && ok.body.warnings[0] === '2 tokens use this ticker; impostors copy tickers; do your own research.'
+        && /^Liquidity is not safety/.test(ok.body.warnings[1]));
+      // mutant: `verify` dropped, or it names neither the SDK findToken nor the MCP find_token -> red
+      check('find: verify points to findToken in @blazephoenix/sdk/find and the local MCP find_token',
+        /findToken/.test(ok.body.verify?.sdk ?? '') && /@blazephoenix\/sdk\/find/.test(ok.body.verify?.sdk ?? '')
+        && /find_token/.test(ok.body.verify?.mcp ?? ''));
+      // mutant: reader: NO_READ dropped (the SDK then wants an rpc -> 400) or any chain read wired in -> red
+      check('find: only the two index hosts are fetched, nothing reaches any other host',
+        ok.seen.length > 0 && ok.seen.every((u) => /^https:\/\/api\.(coingecko|dexscreener)\.com\//.test(u)) && stray.length === 0);
+      // mutant: cache-control removed or set to a max-age -> red
+      check('find: answer is never cached (no-store) and open CORS', ok.res.headers.get('cache-control') === 'no-store'
+        && ok.res.headers.get('access-control-allow-origin') === '*');
+
+      // mutant: the rpc guard dropped and `rpc: p.get('rpc')` passed to findToken instead of NO_READ (fetch to the caller's URL) -> red
+      const evil = await run('chain=base&query=PEPE&rpc=' + encodeURIComponent('https://evil.example/key123'));
+      check('find: an rpc parameter -> 400 rpc_not_accepted, and the caller URL is never fetched',
+        evil.res.status === 400 && evil.body.code === 'rpc_not_accepted' && evil.seen.length === 0
+        && !stray.some((u) => /evil\.example/.test(u)));
+
+      const down = await run('chain=base&query=PEPE', { dexDown: true });
+      // mutant: failedSources filtered on s.ok, or the partial-count warning dropped -> red
+      check('find: a failed index is named in failedSources and sources, its error kept, the count said to be partial',
+        down.res.status === 200 && JSON.stringify(down.body.failedSources) === '["dexscreener"]'
+        && (down.body.sources ?? []).some((s) => s.name === 'dexscreener' && s.ok === false && /HTTP 500/.test(s.error ?? ''))
+        && down.body.candidates?.length === 1 && (down.body.warnings ?? []).some((w) => /only the indexes that answered; failed: dexscreener/.test(w)));
+      const rh = await run('chain=robinhood&query=PEPE');
+      // mutant: failedSources removed -> red; no index fetched for a chain neither index covers
+      check('find: Robinhood Chain, neither index covers it: both named as failed, 0 is said to be partial, nothing fetched',
+        rh.res.status === 200 && JSON.stringify(rh.body.failedSources) === '["coingecko","dexscreener"]'
+        && rh.body.candidates?.length === 0 && rh.seen.length === 0 && (rh.body.warnings ?? []).some((w) => /failed: coingecko, dexscreener/.test(w)));
+
+      // mutant: chain guard dropped (the SDK's bad_chain has another message) -> red
+      const badChain = await run('chain=solana&query=PEPE');
+      check('find: unknown chain -> 400 bad_chain with the chain list, nothing fetched',
+        badChain.res.status === 400 && badChain.body.code === 'bad_chain' && /use one of/.test(badChain.body.error) && badChain.seen.length === 0);
+      // mutant: query guard dropped (the SDK answers bad_request) -> red
+      const noQuery = await run('chain=base&query=%20');
+      check('find: blank query -> 400 bad_query, nothing fetched', noQuery.res.status === 400 && noQuery.body.code === 'bad_query' && noQuery.seen.length === 0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    // mutant: route registered before the GET-only guard, or left out of API_PATHS -> red
+    const idx = read('worker/index.ts');
+    const route = idx.indexOf("if (path === '/api/token/find') return mark(await handleFindToken(url));");
+    check('find: /api/token/find is in API_PATHS and routed after the GET-only guard (POST -> 405)',
+      /API_PATHS = \[[^\]]*'\/api\/token\/find'/.test(idx) && route > idx.indexOf("if (request.method !== 'GET') {"));
+    // mutant: OpenAPI describes a POST, or an rpc parameter -> red
+    const { OPENAPI } = await load('worker/openapi.ts');
+    const op = OPENAPI.paths['/api/token/find'];
+    check('find: OpenAPI has GET only, parameters chain and query, no rpc',
+      !!op?.get && !op.post && JSON.stringify(op.get.parameters.map((x) => x.name)) === '["chain","query"]');
+    check('find: README and llms.txt say unverified proposals, no RPC taken, verify on your own node',
+      /unverified proposals/.test(read('README.md')) && /takes no RPC/.test(read('README.md'))
+      && /unverified proposals/.test(read('llms.txt')) && /rpc_not_accepted/.test(read('llms.txt')));
+  }
 } catch (e) {
   check(`behaviour checks ran to the end (${e?.stack ?? e})`, false);
 } finally {
