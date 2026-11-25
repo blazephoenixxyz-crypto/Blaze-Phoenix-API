@@ -36,7 +36,7 @@ export const MEASURED = 'not measured on-chain';
 
 export const VERIFY = {
   note: 'Nothing here was read on chain: an index can propose any address. Read each candidate on YOUR RPC before using it.',
-  sdk: "findToken({ query, chainId, rpc: '<your RPC>' }) from @blazephoenix/sdk/find: code, symbol, name, decimals, look-alike check, depth measured by the Quoter, venue balances",
+  sdk: "findToken({ query, chainId, rpc: '<your RPC>', sources: 'both' }) from @blazephoenix/sdk/find: code, symbol, name, decimals, look-alike check, depth measured by the Quoter, venue balances",
   mcp: 'the find_token tool of the local MCP server (npx -y @blazephoenix/mcp, reading your node from BLAZEPHOENIX_RPC_URL or BLAZEPHOENIX_RPC_<CHAIN>)',
 } as const;
 

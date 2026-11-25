@@ -154,6 +154,34 @@ const USD_SCHEMA = {
   required: ['ok', 'mode', 'complete'],
 } as const;
 
+/** GET /api/token/find: unverified index proposals, nothing read on chain. */
+const FIND_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    status: { type: 'string' },
+    measured: { type: 'string' },
+    query: { type: 'string' },
+    chainId: { type: 'integer' },
+    candidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { address: { type: 'string' }, chainId: { type: 'integer' }, sources: { type: 'array', items: { type: 'string' } } },
+        required: ['address', 'chainId', 'sources'],
+      },
+    },
+    omitted: { type: 'integer', minimum: 0 },
+    omittedAddresses: { type: 'array', items: { type: 'string' } },
+    omittedNotMeasured: { type: 'array', items: { type: 'string' } },
+    sources: { type: 'array', items: { type: 'object' } },
+    failedSources: { type: 'array', items: { type: 'string' } },
+    verify: { type: 'object', properties: { note: { type: 'string' }, sdk: { type: 'string' }, mcp: { type: 'string' } } },
+    warnings: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['ok', 'status', 'measured', 'query', 'chainId', 'candidates', 'omitted', 'omittedAddresses', 'omittedNotMeasured', 'sources', 'failedSources', 'verify', 'warnings'],
+} as const;
+
 /** A decoded quote; with `usd` in the body it also carries that USD value (or its error), and with `usd: true`
  *  in its request the prepared call valuing its output. */
 const QUOTE_WITH_USD_SCHEMA = {
@@ -402,7 +430,7 @@ export const OPENAPI = {
               + 'complete measure: here, all of them); sources (each index ok, or its error) and failedSources (the name of every index that failed); verify (findToken from '
               + '@blazephoenix/sdk/find, or the find_token tool of the local MCP, both on your RPC); warnings (always: N tokens use this ticker, impostors '
               + 'copy tickers, do your own research; liquidity is not safety; when omitted > 0, the SDK omitted warning)',
-            content: { 'application/json': { schema: { type: 'object', required: ['ok', 'status', 'measured', 'query', 'chainId', 'candidates', 'omitted', 'omittedAddresses', 'omittedNotMeasured', 'sources', 'failedSources', 'verify', 'warnings'] } } },
+            content: { 'application/json': { schema: FIND_SCHEMA } },
           },
           '400': { description: 'rpc_not_accepted, bad_chain, chain_not_live, bad_query or bad_request', content: { 'application/json': { schema: ERROR_SCHEMA } } },
           '502': { description: 'find_failed: the search did not complete', content: { 'application/json': { schema: ERROR_SCHEMA } } },

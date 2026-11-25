@@ -936,7 +936,7 @@ try {
       check("find: findToken runs with sources 'centralized' and no rpc; the answer says not measured on-chain and points to findToken on your RPC",
         spied.status === 200 && calls.length === 1 && calls[0].sources === 'centralized' && !('rpc' in calls[0])
         && spiedBody.measured === 'not measured on-chain' && ok.body.measured === 'not measured on-chain'
-        && /findToken\(\{[^}]*rpc: '<your RPC>'/.test(spiedBody.verify?.sdk ?? ''));
+        && /findToken\(\{[^}]*rpc: '<your RPC>', sources: 'both' \}/.test(spiedBody.verify?.sdk ?? ''));
       // mutant: cache-control removed or set to a max-age -> red
       check('find: answer is never cached (no-store) and open CORS', ok.res.headers.get('cache-control') === 'no-store'
         && ok.res.headers.get('access-control-allow-origin') === '*');
