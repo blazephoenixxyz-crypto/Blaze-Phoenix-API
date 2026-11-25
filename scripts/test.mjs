@@ -959,6 +959,36 @@ try {
         rh.res.status === 200 && JSON.stringify(rh.body.failedSources) === '["coingecko","dexscreener"]'
         && rh.body.candidates?.length === 0 && rh.seen.length === 0 && (rh.body.warnings ?? []).some((w) => /failed: coingecko, dexscreener/.test(w)));
 
+      // More proposals than the SDK cap (10): 13 addresses from Dexscreener on Base, 3 left out and named.
+      const FLOOD = Array.from({ length: 13 }, (_, i) => '0x' + (0xe000 + i).toString(16).padStart(40, '0'));
+      const floodIx = async (input) => {
+        const u = String(input instanceof Request ? input.url : input);
+        if (u.startsWith('https://api.coingecko.com/api/v3/search')) return answer({ coins: [] });
+        if (u.startsWith('https://api.dexscreener.com/latest/dex/search')) return answer({ pairs: FLOOD.map((a) => (
+          { chainId: 'base', baseToken: { address: a, symbol: 'PEPE', name: 'Pepe' }, quoteToken: { address: WETH_BASE, symbol: 'WETH', name: 'Wrapped Ether' } })) });
+        return answer({ error: 'unexpected' }, 599);
+      };
+      const flood = await (await handleFindToken(new URL('https://blazephoenix.xyz/api/token/find?chain=base&query=PEPE'), { findToken: sdkFindToken, fetch: floodIx })).json();
+      const readF = new Set((flood.candidates ?? []).map((c) => c.address.toLowerCase()));
+      const leftF = FLOOD.filter((a) => !readF.has(a));
+      // mutant: `omittedAddresses` dropped from the answer (only the count is left) -> red
+      check('find: proposals past the cap are named in omittedAddresses, every one that is not a candidate and only those',
+        flood.candidates?.length === 10 && flood.omitted === 3 && flood.omittedAddresses?.length === 3
+        && leftF.every((a) => flood.omittedAddresses.some((o) => o.toLowerCase() === a)));
+      // mutant: `omittedNotMeasured` dropped from the answer -> red
+      check('find: nothing is measured here, so every omitted proposal is in omittedNotMeasured',
+        flood.omittedNotMeasured?.length === 3 && flood.omittedNotMeasured.every((a) => (flood.omittedAddresses ?? []).includes(a)));
+      // mutant: the omitted warning dropped, or pushed with omitted = 0 too, or with notMeasured = 0 -> red
+      check('find: the SDK omitted warning sits between the ticker warning and liquidity is not safety, only when omitted > 0',
+        JSON.stringify(flood.warnings) === JSON.stringify([WARNINGS.dyor(13), WARNINGS.omitted(3, 3), WARNINGS.notSafety])
+        && !(ok.body.warnings ?? []).some((w) => /omittedAddresses/.test(w)));
+      // mutant: `omittedNotMeasured: r.omittedAddresses` (the two lists merged or swapped) -> red
+      const stub = async ({ query, chainId }) => ({ query, chainId, mode: 'centralized', discovery: null, candidates: [], sources: [],
+        omitted: 2, omittedAddresses: [B, A], omittedNotMeasured: [A], warnings: [], basis: '' });
+      const passed = await (await handleFindToken(new URL('https://blazephoenix.xyz/api/token/find?chain=base&query=PEPE'), { findToken: stub })).json();
+      check('find: omittedAddresses and omittedNotMeasured pass through as the SDK gives them, in queue order',
+        JSON.stringify(passed.omittedAddresses) === JSON.stringify([B, A]) && JSON.stringify(passed.omittedNotMeasured) === JSON.stringify([A]));
+
       // mutant: chain guard dropped (the SDK's bad_chain has another message) -> red
       const badChain = await run('chain=solana&query=PEPE');
       check('find: unknown chain -> 400 bad_chain with the chain list, nothing fetched',
@@ -983,6 +1013,10 @@ try {
     check('find: OpenAPI 200 answer requires measured and says not measured on-chain',
       op?.get?.responses?.['200']?.content?.['application/json']?.schema?.required?.includes('measured')
       && /measured "not measured on-chain"/.test(op?.get?.responses?.['200']?.description ?? ''));
+    // mutant: omittedAddresses or omittedNotMeasured left out of the OpenAPI 200 answer -> red
+    check('find: OpenAPI 200 answer requires omittedAddresses and omittedNotMeasured and describes them',
+      ['omittedAddresses', 'omittedNotMeasured'].every((k) => op?.get?.responses?.['200']?.content?.['application/json']?.schema?.required?.includes(k)
+        && (op?.get?.responses?.['200']?.description ?? '').includes(k)));
     check('find: README and llms.txt say unverified proposals, no RPC taken, verify on your own node',
       /unverified proposals/.test(read('README.md')) && /takes no RPC/.test(read('README.md'))
       && /unverified proposals/.test(read('llms.txt')) && /rpc_not_accepted/.test(read('llms.txt')));

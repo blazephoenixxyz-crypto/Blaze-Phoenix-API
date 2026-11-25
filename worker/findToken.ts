@@ -80,10 +80,14 @@ export async function handleFindToken(url: URL, deps: FindDeps = { findToken: sd
       chainId: r.chainId,
       candidates: r.candidates.map((c) => ({ address: c.address, chainId: r.chainId, sources: c.sources })),
       omitted: r.omitted,
+      // Past the SDK cap, named rather than only counted (absent is not zero); nothing here is measured,
+      // so the SDK lists each of them as not measured too.
+      omittedAddresses: r.omittedAddresses,
+      omittedNotMeasured: r.omittedNotMeasured,
       sources: r.sources,
       failedSources,
       verify: VERIFY,
-      warnings: [WARNINGS.dyor(proposed), ...partial, WARNINGS.notSafety],
+      warnings: [WARNINGS.dyor(proposed), ...partial, ...(r.omitted > 0 ? [WARNINGS.omitted(r.omitted, r.omittedNotMeasured.length)] : []), WARNINGS.notSafety],
     });
   } catch (e) {
     if (e instanceof BlazeError && (e.code === 'bad_request' || e.code === 'bad_chain')) return fail(400, e.code, e.message);

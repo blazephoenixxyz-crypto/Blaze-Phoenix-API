@@ -57,7 +57,9 @@ such as `2.0.0`); without it, each chain uses its newest deployed version.
   ticker, each with the index that proposed it, labelled `unverified proposals`. It
   reads no chain and takes no RPC: an `rpc` parameter is refused, never fetched, so
   the Worker never calls a host the caller names. Nothing is ranked by liquidity or
-  labelled; an index that fails is listed by name, never hidden. `verify` says how to
+  labelled; an index that fails is listed by name, never hidden. Proposals past the
+  SDK cap are named in `omittedAddresses` (and `omittedNotMeasured`), not only
+  counted in `omitted`. `verify` says how to
   read the candidates on your own node (`findToken` from `@blazephoenix/sdk/find`, or
   the local MCP's `find_token`), and the warnings ride on every answer: N tokens use
   this ticker, impostors copy tickers, do your own research; liquidity is not safety.
