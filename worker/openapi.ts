@@ -154,6 +154,34 @@ const USD_SCHEMA = {
   required: ['ok', 'mode', 'complete'],
 } as const;
 
+/** GET /api/token/find: unverified index proposals, nothing read on chain. */
+const FIND_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    status: { type: 'string' },
+    measured: { type: 'string' },
+    query: { type: 'string' },
+    chainId: { type: 'integer' },
+    candidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { address: { type: 'string' }, chainId: { type: 'integer' }, sources: { type: 'array', items: { type: 'string' } } },
+        required: ['address', 'chainId', 'sources'],
+      },
+    },
+    omitted: { type: 'integer', minimum: 0 },
+    omittedAddresses: { type: 'array', items: { type: 'string' } },
+    omittedNotMeasured: { type: 'array', items: { type: 'string' } },
+    sources: { type: 'array', items: { type: 'object' } },
+    failedSources: { type: 'array', items: { type: 'string' } },
+    verify: { type: 'object', properties: { note: { type: 'string' }, sdk: { type: 'string' }, mcp: { type: 'string' } } },
+    warnings: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['ok', 'status', 'measured', 'query', 'chainId', 'candidates', 'omitted', 'omittedAddresses', 'omittedNotMeasured', 'sources', 'failedSources', 'verify', 'warnings'],
+} as const;
+
 /** A decoded quote; with `usd` in the body it also carries that USD value (or its error), and with `usd: true`
  *  in its request the prepared call valuing its output. */
 const QUOTE_WITH_USD_SCHEMA = {
@@ -383,6 +411,30 @@ export const OPENAPI = {
         operationId: 'getBadge',
         summary: 'shields.io endpoint JSON for the staking badge. Proof-of-solvency: coming soon — the badge answers status coming_soon and reads no contract',
         responses: { '200': { description: 'badge (schemaVersion 1)', content: { 'application/json': {} } } },
+      },
+    },
+    '/api/token/find': {
+      get: {
+        operationId: 'findTokenProposals',
+        summary: 'UNVERIFIED proposals for a name or ticker on one chain: the addresses two third-party indexes (CoinGecko, Dexscreener) propose, '
+          + 'each with the index that proposed it. No chain is read and no RPC is taken (an rpc parameter is refused, never fetched); nothing is '
+          + 'ranked by liquidity or labelled, and nothing here picks a token. `verify` says how to read each candidate on YOUR node. Never cached',
+        parameters: [
+          { name: 'chain', in: 'query', required: true, schema: { type: 'string' }, description: 'chain id or name (base, eth, optimism, arbitrum, robinhood)' },
+          { name: 'query', in: 'query', required: true, schema: { type: 'string' }, description: 'a name or ticker, e.g. PEPE' },
+        ],
+        responses: {
+          '200': {
+            description: 'status "unverified proposals"; measured "not measured on-chain" (index proposals only; the on-chain index runs in findToken on your RPC); candidates (address, chainId, sources: the indexes that proposed it); omitted (proposals past the SDK '
+              + 'cap of 10), omittedAddresses (those proposals, named, in queue order) and omittedNotMeasured (those of them with no '
+              + 'complete measure: here, all of them); sources (each index ok, or its error) and failedSources (the name of every index that failed); verify (findToken from '
+              + '@blazephoenix/sdk/find, or the find_token tool of the local MCP, both on your RPC); warnings (always: N tokens use this ticker, impostors '
+              + 'copy tickers, do your own research; liquidity is not safety; when omitted > 0, the SDK omitted warning)',
+            content: { 'application/json': { schema: FIND_SCHEMA } },
+          },
+          '400': { description: 'rpc_not_accepted, bad_chain, chain_not_live, bad_query or bad_request', content: { 'application/json': { schema: ERROR_SCHEMA } } },
+          '502': { description: 'find_failed: the search did not complete', content: { 'application/json': { schema: ERROR_SCHEMA } } },
+        },
       },
     },
     '/api/verify': {

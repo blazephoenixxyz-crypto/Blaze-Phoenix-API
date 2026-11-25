@@ -52,6 +52,18 @@ such as `2.0.0`); without it, each chain uses its newest deployed version.
   second call pinned at the block hash of the first (EIP-1898, `requireCanonical`);
   pass that hash as `blockHash` on prepare or `usd.blockHash` on decode, or the value
   is `not measured` (never a call pinned by number).
+- **Token finder.** `GET /api/token/find?chain=base&query=PEPE` returns only the
+  addresses two third-party indexes (CoinGecko, Dexscreener) propose for a name or
+  ticker, each with the index that proposed it, labelled `unverified proposals`. It
+  reads no chain and takes no RPC: an `rpc` parameter is refused, never fetched, so
+  the Worker never calls a host the caller names. Nothing is ranked by liquidity or
+  labelled; an index that fails is listed by name, never hidden. Proposals past the
+  SDK cap are named in `omittedAddresses` (and `omittedNotMeasured`), not only
+  counted in `omitted`. `verify` says how to
+  read the candidates on your own node (`findToken` from `@blazephoenix/sdk/find` (with `sources: 'both'`, so the index proposals are read too), or
+  the local MCP's `find_token`), and the warnings ride on every answer: N tokens use
+  this ticker, impostors copy tickers, do your own research; liquidity is not safety.
+  Never cached (`worker/findToken.ts`).
 - **Metering.** Only requests that Cloudflare's bot score marks as suspect are metered
   (`worker/requestClass.ts`); verified crawlers and ordinary clients are not.
 
@@ -74,6 +86,7 @@ For agents, [`llms.txt`](./llms.txt) describes this API in the [llmstxt.org](htt
 | GET | `/api/tape` | Recent swaps |
 | GET | `/api/badge` | shields.io endpoint for the staking badge (proof-of-solvency: coming soon) |
 | GET | `/api/verify` | Re-executes a proof-carrying fact live on-chain |
+| GET | `/api/token/find` | Unverified proposals for a name or ticker from CoinGecko and Dexscreener; no chain read, verify on your RPC |
 | GET | `/solvency` | Staking page (proof-of-solvency: coming soon) |
 | POST | `/mcp` | Remote MCP endpoint (streamable HTTP, stateless) |
 | GET | `/api/quote`, POST `/api/quote/batch` | Retired; answer `400 rpc_required` |

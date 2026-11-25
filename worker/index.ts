@@ -30,6 +30,7 @@ import { handleMcp, MCP_CORS_HEADERS } from './mcp';
 import { setProviderKeys } from './providerKeys';
 import { markdownMirrorPath } from './negotiate';
 import { handleVerify } from './verify';
+import { handleFindToken } from './findToken';
 import { classifyRequest, type RequestClass } from './requestClass';
 
 interface Env {
@@ -198,7 +199,7 @@ export default {
     // pure; /api/quote and /api/quote/batch answer rpc_required with the
     // prepared call). stats/tape/badge/verify are the site's own edge-cached
     // dashboards — one read per cache window, whatever the caller count.
-    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/version', '/api/stats', '/api/badge', '/api/tape', '/api/verify'];
+    const API_PATHS = ['/api', '/api/quote', '/api/quote/batch', '/api/quote/prepare', '/api/quote/decode', '/api/deployments', '/api/abi', '/api/manifest', '/api/openapi.json', '/api/health', '/api/version', '/api/stats', '/api/badge', '/api/tape', '/api/verify', '/api/token/find'];
     if (API_PATHS.includes(path)) {
       try {
         // The actor verdict goes out in a header on ALL API responses, through a
@@ -242,6 +243,7 @@ export default {
         if (path === '/api/badge') return mark(await handleBadge());
         if (path === '/api/tape') return mark(await handleTape(url));
         if (path === '/api/verify') return mark(await handleVerify(url, env));
+        if (path === '/api/token/find') return mark(await handleFindToken(url));
         return mark(handleManifest());
       } catch {
         return new Response(JSON.stringify({ ok: false, code: 'internal', error: 'internal' }), {
