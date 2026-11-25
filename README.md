@@ -60,7 +60,7 @@ such as `2.0.0`); without it, each chain uses its newest deployed version.
   labelled; an index that fails is listed by name, never hidden. Proposals past the
   SDK cap are named in `omittedAddresses` (and `omittedNotMeasured`), not only
   counted in `omitted`. `verify` says how to
-  read the candidates on your own node (`findToken` from `@blazephoenix/sdk/find`, or
+  read the candidates on your own node (`findToken` from `@blazephoenix/sdk/find` (with `sources: 'both'`, so the index proposals are read too), or
   the local MCP's `find_token`), and the warnings ride on every answer: N tokens use
   this ticker, impostors copy tickers, do your own research; liquidity is not safety.
   Never cached (`worker/findToken.ts`).
