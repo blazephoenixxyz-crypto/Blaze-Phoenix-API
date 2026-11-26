@@ -27,7 +27,7 @@ USD value, derived on-chain with no price oracle and no third-party price API. `
 - Label: the response says `USD (via USDC)` (or `USD (via USDG)`), with `dollarToken`, `blockNumber`, every via with its legs, `unitPrice` and a one-sentence `basis`.
 - Decentralised: this hosted endpoint only prepares and decodes; it performs no RPC. Your node answers the call.
 
-Protocol V1 is live on all five chains; V2 (Router, Solver, Hub, Quoter and Gate with the Core and Math libraries) is pending and is not planned for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version such as `2.0.0`).
+Protocol V1 is live on all five chains; V2 (Router, Solver, Hub, Quoter and Gate with the Core and Math libraries) is pending and targets Ethereum, Base, Optimism, Arbitrum, Robinhood Chain and Avalanche C-Chain. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version such as `2.0.0`).
 
 Token finder: `GET /api/token/find?chain=base&query=PEPE` returns unverified proposals only: the addresses CoinGecko and Dexscreener propose for a name or ticker, each with the index that proposed it, and `failedSources` naming any index that failed. Proposals past the SDK cap of 10 are named in `omittedAddresses` and `omittedNotMeasured`, with the SDK's omitted warning, not only counted in `omitted`. It reads no chain, takes no RPC (an `rpc` parameter answers `400 rpc_not_accepted`) and ranks nothing by liquidity. Verify each candidate on your own node with `findToken` from `@blazephoenix/sdk/find` (with `sources: 'both'`, so the index proposals are read too) or the local MCP tool `find_token`; the warnings are always there: N tokens use this ticker, impostors copy tickers, do your own research; liquidity is not safety.
 

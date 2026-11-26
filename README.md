@@ -27,8 +27,8 @@ they answer `400 rpc_required` with the prepared call inline.
 
 Protocol V1 is live on Base (8453), Ethereum (1), Optimism (10), Arbitrum (42161) and
 Robinhood Chain (4663). V2 (Router, Solver, Hub, Quoter and Gate, with the Core and Math
-libraries) is pending, so `GET /api/deployments` lists it as pending, and it is not planned
-for Ethereum L1. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version
+libraries) is pending, so `GET /api/deployments` lists it as pending; it
+targets Ethereum, Base, Optimism, Arbitrum, Robinhood Chain and Avalanche C-Chain. `prepare` takes an optional `version` (`latest`, `1`, `2` or a full version
 such as `2.0.0`); without it, each chain uses its newest deployed version.
 
 ## Cost, what you bring, limits
