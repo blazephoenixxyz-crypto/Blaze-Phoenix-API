@@ -44,6 +44,7 @@ import {
   minOutFor, DEFAULT_SLIPPAGE_BPS,
 } from './codec';
 import { resolveChainParam } from '../src/lib/chainAlias';
+import { withBuilderCode } from '../src/lib/builderCode';
 import { attachUsdOut, decodeUsd, prepareUsd } from './usd';
 import { SITE } from '../src/config/site';
 import { resolveSymbolViaDex, SYMBOLISH, type ResolvedSymbol } from '../src/lib/symbolResolve';
@@ -842,7 +843,7 @@ async function execQuote(p: QuoteParams): Promise<{ status: number; body: Record
       },
       route: jsonSafe(pv.route),
       checks,
-      ...(tx ? { tx } : {}),
+      ...(tx ? { tx: withBuilderCode(p.chainId, tx) } : {}),
       wrapRequired: p.nativeIn,
       unwrapAfter: p.nativeOut, // out=ETH quotes deliver WETH — unwrap is yours
       executeWith: {
