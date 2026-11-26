@@ -275,6 +275,18 @@ try {
   const xTx = decodeQuote({ ...req1, fn: 'previewPlanExact', userMinOut: '2290000000', recipient: rcpt, slippageBps: 50, deadline: String(NOW + 120) },
     encodeFunctionResult({ abi: QUOTER_ABI, functionName: 'previewPlanExact', result: [{ ...live, singleOut: live.totalOut }, live.totalOut] }), NOW);
   check('calldata: exact mode with a recipient and userMinOut emits no tx', xTx.ok && xTx.body.mode === 'exact' && xTx.body.tx === undefined);
+  // Base Builder Code (ERC-8021): the Router call on Base ends with the suffix; the swap
+  // arguments decode unchanged in front of it; no other chain carries it.
+  const SUFFIX = '62635f72723766756131620b0080218021802180218021802180218021';
+  check('builder code: the decoded tx on Base ends with the ERC-8021 suffix', mAbove.body.tx.data.endsWith(SUFFIX));
+  check('builder code: the swap arguments decode unchanged in front of the suffix',
+    decodeFunctionData({ abi: ROUTER_ABI, data: mAbove.body.tx.data }).args[2] === 2_300_000_000n);
+  {
+    const { withBuilderCode } = await load('src/lib/builderCode.ts');
+    const t = { to: rcpt, data: '0xabcd', value: '0' };
+    check('builder code: Base only (Arbitrum and Robinhood calls stay unchanged)',
+      withBuilderCode(8453, t).data === `0xabcd${SUFFIX}` && withBuilderCode(42161, t) === t && withBuilderCode(4663, t) === t);
+  }
 
   // The first-party quote (the site's bot, our own RPC) emits swapExactIn calldata when given a
   // recipient: same rule as the decode — max(userMinOut, netOut less slippageBps (default 50),
@@ -301,6 +313,8 @@ try {
     const fp0 = await fpAt('');
     check('first-party quote: no recipient -> quote from one RPC call, no tx', fp0.b.ok === true && fp0.rpcCalls === 1 && fp0.b.tx === undefined);
     const fpR = `&recipient=${USER}`;
+    check('first-party quote: the tx on Base carries the builder code suffix',
+      (await fpAt(fpR)).b.tx?.data.endsWith('62635f72723766756131620b0080218021802180218021802180218021') === true);
     check('first-party quote: recipient, no userMinOut/slippageBps -> signs the 50 bps floor', (await fpAt(fpR)).min === FLOOR);
     check('first-party quote: userMinOut=1 -> signs the floor, not 1', (await fpAt(`${fpR}&userMinOut=1`)).min === FLOOR);
     check('first-party quote: userMinOut = floor - 1 -> signs the floor', (await fpAt(`${fpR}&userMinOut=${FLOOR - 1n}`)).min === FLOOR);

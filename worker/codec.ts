@@ -27,6 +27,7 @@ import {
 import { QUOTER_ABI, ROUTER_ABI } from '../src/abis/blaze';
 import { CHAINS, type SupportedChainId } from '../src/config/chains';
 import { SITE } from '../src/config/site';
+import { withBuilderCode } from '../src/lib/builderCode';
 import {
   DEPLOYMENTS, compareVersions, deployedVersions, isV2, type ContractSet, type DeployedChainId,
 } from '../src/config/deployments';
@@ -615,7 +616,7 @@ export function decodeQuote(rawReq: unknown, rawResult: unknown, nowSec = Math.f
         },
         route: jsonSafe(pv.route),
         checks,
-        ...(tx ? { tx, minOut: minOut!.toString(), deadline: req.deadline, entry, encodedBy } : {}),
+        ...(tx ? { tx: withBuilderCode(req.chainId, tx), minOut: minOut!.toString(), deadline: req.deadline, entry, encodedBy } : {}),
         ...(txError ? { txError } : {}),
         ...(tx && !req.nativeIn ? {
           approval: {
